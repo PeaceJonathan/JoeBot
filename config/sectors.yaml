@@ -1,0 +1,46 @@
+# Sector ticker universes for the screener.
+#
+# These are hand-picked starting lists of small/mid-cap names (Phase 1: tech
+# and defense). They are NOT auto-refreshed yet -- update this file manually
+# as names IPO, get acquired, or delist. Phase 3's backtester needs a
+# separate *historical* universe (including delisted names); this file is
+# only the *live* screening universe.
+#
+# market_cap_hint is informational only (approximate, may go stale); the
+# screener uses live market cap from market_data at scan time.
+
+tech:
+  description: >
+    Smaller technology companies pursuing a distinct approach with visible
+    organic community/user support, rather than mega-cap incumbents.
+  tickers:
+    - SOUN   # SoundHound AI
+    - BBAI   # BigBear.ai
+    - PATH   # UiPath
+    - AI     # C3.ai
+    - IONQ   # IonQ (quantum computing)
+    - RGTI   # Rigetti Computing
+    - QUBT   # Quantum Computing Inc
+    - SMCI   # Super Micro Computer
+    - MARA   # Marathon Digital
+    - APPS   # Digital Turbine
+    - FROG   # JFrog
+    - PLTR   # Palantir (reference/anchor, not small-cap -- useful as a backtest control)
+    - GTLB   # GitLab
+    - NET    # Cloudflare
+
+defense:
+  description: >
+    Smaller defense/aerospace contractors positioning as disruptive
+    "next-generation" players rather than legacy primes.
+  tickers:
+    - KTOS   # Kratos Defense & Security
+    - AVAV   # AeroVironment
+    - RCAT   # Red Cat Holdings (drones)
+    - LUNR   # Intuitive Machines
+    - RKLB   # Rocket Lab
+    - ASTS   # AST SpaceMobile
+    - PLTR   # Palantir (also defense-adjacent; reference/anchor)
+    - CVU    # CPI Aerostructures
+    - ONDS   # Ondas Holdings
+    - VVX    # V2X Inc

@@ -1,0 +1,26 @@
+[project]
+name = "joebot"
+version = "0.1.0"
+description = "Personal stock breakout scanner and decision-support tool. Not automated trading; not financial advice."
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "yfinance>=0.2.40",
+    "requests>=2.31",
+    "PyYAML>=6.0",
+    "python-dotenv>=1.0",
+    "SQLAlchemy>=2.0",
+    "edgartools>=3.0",
+]
+
+[project.optional-dependencies]
+dashboard = ["streamlit>=1.35"]
+sentiment = ["praw>=7.7"]
+dev = ["pytest>=8.0"]
+
+[tool.setuptools.packages.find]
+include = ["joebot*", "config*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
