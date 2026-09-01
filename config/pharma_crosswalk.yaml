@@ -1,0 +1,14 @@
+# Ticker -> ClinicalTrials.gov sponsor name.
+#
+# Manually maintained and deliberately small/illustrative -- there is no
+# reliable automated way to map a ticker to the exact sponsor name string
+# ClinicalTrials.gov indexes filings under. Extend this as you track new
+# names; a ticker missing from here just scores 0 in ClinicalTrialSignal
+# with confidence 0.0 (unknown, not "no trial activity"), not a red flag.
+AXSM: Axsome Therapeutics, Inc.
+SRPT: Sarepta Therapeutics, Inc.
+IONS: Ionis Pharmaceuticals, Inc.
+BCAB: BioAtla, Inc.
+SAVA: Cassava Sciences, Inc.
+IBRX: ImmunityBio, Inc.
+RXRX: Recursion Pharmaceuticals, Inc.

@@ -43,13 +43,21 @@ def main() -> None:
     parser.add_argument("--years", type=float, default=3.0, help="How many years of history to walk forward over.")
     parser.add_argument("--step-days", type=int, default=30, help="Spacing between as_of_dates.")
     parser.add_argument("--end-date", type=str, default=None, help="ISO date; defaults to today.")
+    parser.add_argument(
+        "--sector", type=str, default=None,
+        help="Restrict to one sector from config/sectors.yaml (e.g. a 'candidate' "
+             "sector like clean_energy) instead of the full universe.",
+    )
     args = parser.parse_args()
 
     end_date = dt.date.fromisoformat(args.end_date) if args.end_date else dt.date.today()
     start_date = end_date - dt.timedelta(days=int(args.years * 365))
 
-    log.info("Running walk-forward backtest %s -> %s (step=%dd)", start_date, end_date, args.step_days)
-    result = run_walk_forward(DEFAULT_SIGNALS, start_date, end_date, step_days=args.step_days)
+    log.info(
+        "Running walk-forward backtest %s -> %s (step=%dd, sector=%s)",
+        start_date, end_date, args.step_days, args.sector or "all",
+    )
+    result = run_walk_forward(DEFAULT_SIGNALS, start_date, end_date, step_days=args.step_days, sector_filter=args.sector)
     log.info("Collected %d records; calibration cutoff at %s", len(result.records), result.calibration_cutoff)
 
     evaluation_fold = result.evaluation_fold()

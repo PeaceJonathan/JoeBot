@@ -44,10 +44,12 @@ MA_SLOW = 200
 # hard rule: they must be replaced by walk-forward out-of-sample results from
 # joebot/backtest, never hand-tuned on the full history.
 DEFAULT_SIGNAL_WEIGHTS = {
-    "technical_breakout": 0.35,
-    "fundamental_sanity": 0.25,
-    "activist_stake": 0.25,
-    "leadership_change": 0.15,
+    "technical_breakout": 0.30,
+    "fundamental_sanity": 0.20,
+    "activist_stake": 0.20,
+    "leadership_change": 0.10,
+    "sentiment_reddit": 0.10,
+    "clinical_trial": 0.10,
 }
 
 # How far back (in days) the catalyst signals look for a qualifying filing.

@@ -8,21 +8,27 @@ you to enter manually — originally built with Fidelity in mind, which has
 no public trading API for retail accounts. Nothing it produces is financial
 advice; verify everything yourself before acting on it.
 
-## What it does today (Phase 1 + 2)
+## What it does today (Phase 1 + 2 + 4)
 
-- Screens a configured universe of small/mid-cap tech, defense, and
-  "faded giant" comeback tickers (`config/sectors.yaml`) using:
-  - **Technical breakout signals**: proximity to the 52-week high, volume
-    surge, ATR, RSI, and a 50/200-day moving-average crossover.
-  - **Fundamental sanity signals**: revenue growth trend and cash position,
-    pulled from SEC XBRL filings.
-  - **Activist-stake signal**: a new/recent Schedule 13D or 13G filing on
-    the ticker that isn't a routine passive-index filing — the mechanism
+- Screens the `status: active` sectors in `config/sectors.yaml` (tech,
+  defense, faded-giant comebacks, pharma) using six signals:
+  - **Technical breakout**: proximity to the 52-week high, volume surge,
+    ATR, RSI, and a 50/200-day moving-average crossover.
+  - **Fundamental sanity**: revenue growth trend and cash position, pulled
+    from SEC XBRL filings.
+  - **Activist-stake**: a new/recent Schedule 13D or 13G filing on the
+    ticker that isn't a routine passive-index filing — the mechanism
     behind the GoPro-style "someone notable took a stake, stock rallies"
     pattern.
-  - **Leadership-change signal**: a recent 8-K Item 5.02 (officer/director
+  - **Leadership-change**: a recent 8-K Item 5.02 (officer/director
     departure or appointment) — a new exec team is a classic comeback
     catalyst for a company that's fallen off.
+  - **Reddit sentiment**: mention-volume and mention-velocity across a
+    handful of investing subreddits — one input among many, not a
+    standalone buy signal.
+  - **Clinical trial**: a recently-updated late-phase (III/IV) trial for a
+    pharma ticker in `config/pharma_crosswalk.yaml` — a proxy for
+    "approaching a readout," not a prediction of the trial's outcome.
 - Combines signals into a ranked, weighted composite score with full
   per-signal provenance (see "Why weights are a placeholder" below).
 - Persists every run to a local SQLite database (`data/joebot.db`) —
@@ -30,6 +36,12 @@ advice; verify everything yourself before acting on it.
   accession number so a filing isn't stored twice as it stays in the
   lookback window) — and writes a markdown report to
   `data/reports/YYYY-MM-DD.md`.
+- `clean_energy`, `cybersecurity`, `space_satellite`, and
+  `robotics_automation` are seeded as `status: candidate` sectors —
+  Phase 4's sector-discovery mechanism. They're excluded from the daily
+  scan until you run `python scripts/run_backtest.py --sector clean_energy`
+  (etc.), look at the evaluation-fold spread, and manually flip a sector's
+  status to `active` in `config/sectors.yaml` based on that evidence.
 
 ## Backtesting (Phase 3)
 

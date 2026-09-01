@@ -78,7 +78,13 @@ def run_walk_forward(
     start_date: dt.date,
     end_date: dt.date,
     step_days: int = 30,
+    sector_filter: str | None = None,
 ) -> BacktestResult:
+    """sector_filter, if given, restricts the universe to one sector name
+    from config/sectors.yaml -- this is how a candidate sector (Phase 4
+    sector discovery) gets validated before being promoted to status:
+    active: `run_walk_forward(..., sector_filter="clean_energy")` and look
+    at the evaluation fold's spread, per sector, not on vibes."""
     as_of_dates = _generate_as_of_dates(start_date, end_date, step_days)
     if not as_of_dates:
         raise ValueError(
@@ -91,6 +97,8 @@ def run_walk_forward(
 
     for as_of_date in as_of_dates:
         universe_by_sector = universe_builder.universe_as_of(as_of_date)
+        if sector_filter is not None:
+            universe_by_sector = {sector_filter: universe_by_sector.get(sector_filter, [])}
         for sector, tickers in universe_by_sector.items():
             for ticker in tickers:
                 delisting_info = delistings.get(ticker)

@@ -1,18 +1,29 @@
 # Sector ticker universes for the screener.
 #
-# These are hand-picked starting lists of small/mid-cap names (Phase 1: tech
-# and defense). They are NOT auto-refreshed yet -- update this file manually
-# as names IPO, get acquired, or delist. Phase 3's backtester needs a
-# separate *historical* universe (including delisted names); this file is
+# These are hand-picked starting lists of small/mid-cap names. They are NOT
+# auto-refreshed -- update this file manually as names IPO, get acquired, or
+# delist. Phase 3's backtester needs a separate *historical* universe
+# (including delisted names, see data/delisted_universe.csv); this file is
 # only the *live* screening universe.
 #
-# market_cap_hint is informational only (approximate, may go stale); the
-# screener uses live market cap from market_data at scan time.
+# status: "active" (default if omitted) sectors are scanned by the daily
+# screener (joebot/screener/sector_screens.py). "candidate" sectors are
+# Phase 4's sector-discovery mechanism -- new sector ideas that haven't
+# been validated yet. They're excluded from the live daily scan by default
+# but ARE included in scripts/run_backtest.py's universe (via
+# joebot/backtest/universe_builder.py, which reads every sector regardless
+# of status), so you can run `python scripts/run_backtest.py --sector
+# clean_energy` and look at the resulting evaluation-fold spread before
+# manually flipping a candidate sector's status to "active" here. Don't
+# promote a candidate sector on vibes -- that's exactly the kind of
+# unvalidated assumption this project's backtesting discipline exists to
+# catch.
 
 tech:
   description: >
     Smaller technology companies pursuing a distinct approach with visible
     organic community/user support, rather than mega-cap incumbents.
+  status: active
   tickers:
     - SOUN   # SoundHound AI
     - BBAI   # BigBear.ai
@@ -33,6 +44,7 @@ defense:
   description: >
     Smaller defense/aerospace contractors positioning as disruptive
     "next-generation" players rather than legacy primes.
+  status: active
   tickers:
     - KTOS   # Kratos Defense & Security
     - AVAV   # AeroVironment
@@ -52,6 +64,7 @@ faded_giants:
     thesis -- the "GoPro" pattern. Phase 2's activist_stake and
     leadership_change signals are the primary driver here, not the
     technical/fundamental growth screens built for the other sectors.
+  status: active
   tickers:
     - GPRO   # GoPro -- the user's own reference example
     - PTON   # Peloton
@@ -61,3 +74,66 @@ faded_giants:
     - VFC    # V.F. Corporation
     - KSS    # Kohl's
     - KODK   # Eastman Kodak
+
+pharma:
+  description: >
+    Small/mid-cap pharma and biotech names with active late-stage clinical
+    trials -- the ClinicalTrialSignal candidate pool (config/pharma_crosswalk.yaml
+    maps each ticker to its ClinicalTrials.gov sponsor name).
+  status: active
+  tickers:
+    - AXSM   # Axsome Therapeutics
+    - SRPT   # Sarepta Therapeutics
+    - IONS   # Ionis Pharmaceuticals
+    - BCAB   # BioAtla
+    - SAVA   # Cassava Sciences
+    - IBRX   # ImmunityBio
+    - RXRX   # Recursion Pharmaceuticals
+
+clean_energy:
+  description: >
+    Candidate sector (Phase 4 sector discovery) -- smaller clean-energy/grid
+    companies. Not yet backtest-validated; excluded from the live daily
+    scan until promoted to status: active based on a real
+    scripts/run_backtest.py evaluation-fold result.
+  status: candidate
+  tickers:
+    - PLUG   # Plug Power
+    - FSLR   # First Solar
+    - ENPH   # Enphase Energy
+    - BE     # Bloom Energy
+    - STEM   # Stem, Inc.
+
+cybersecurity:
+  description: >
+    Candidate sector (Phase 4 sector discovery) -- smaller cybersecurity
+    companies. Not yet backtest-validated; see clean_energy's note above.
+  status: candidate
+  tickers:
+    - CRWD   # CrowdStrike (reference/anchor, not small-cap)
+    - S      # SentinelOne
+    - CYBR   # CyberArk
+    - VRNS   # Varonis Systems
+    - TENB   # Tenable
+
+space_satellite:
+  description: >
+    Candidate sector (Phase 4 sector discovery) -- overlaps somewhat with
+    defense but distinct commercial-space thesis. Not yet backtest-validated.
+  status: candidate
+  tickers:
+    - RKLB   # Rocket Lab (also in defense; fine, a ticker can be in >1 sector)
+    - ASTS   # AST SpaceMobile (also in defense)
+    - SATL   # Satellogic
+    - PL     # Planet Labs
+
+robotics_automation:
+  description: >
+    Candidate sector (Phase 4 sector discovery) -- smaller robotics/
+    automation companies. Not yet backtest-validated.
+  status: candidate
+  tickers:
+    - SERV   # Serve Robotics
+    - SYM    # Symbotic
+    - PATH   # UiPath (also in tech)
+    - KSCP   # Knightscope
