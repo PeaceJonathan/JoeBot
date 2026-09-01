@@ -101,6 +101,11 @@ RISK_PROFILE_BREAKPOINTS: list[tuple[int, RiskProfile]] = [
     )),
 ]
 
+# Defaults for scripts/run_daily.py's standalone position-sizing suggestion
+# when the user hasn't opened the dashboard to set a real budget/slider.
+DEFAULT_RISK_SLIDER = 50.0
+DEFAULT_BUDGET = 10_000.0
+
 
 def ensure_dirs() -> None:
     for d in (DATA_DIR, REPORTS_DIR, CACHE_DIR):

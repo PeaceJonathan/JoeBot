@@ -101,6 +101,22 @@ class TechnicalBreakoutSignal:
         latest_close = df["close"].iloc[-1]
         atr_pct_of_price = float(latest_atr / latest_close) if pd.notna(latest_atr) and latest_close else None
 
+        # Avg dollar volume and market cap: liquidity/size metrics the risk
+        # profile (joebot/risk) filters candidates on. Stored here in
+        # metadata (persisted to signals_history) rather than re-fetched by
+        # every consumer, so the dashboard can re-filter by risk slider
+        # against already-persisted data without hitting the network again.
+        # market_cap is always *current* (fetch_market_cap has no point-in-time
+        # variant), unlike everything else in this signal which is correctly
+        # gated to as_of_date. Harmless for a live scan or the dashboard's
+        # risk filter (both use as_of_date=today), but this field must never
+        # be used inside backtest scoring/attribution -- it isn't today, and
+        # joebot/backtest/engine.py doesn't read signal metadata at all, only
+        # score/confidence, so this can't leak into a backtest result.
+        dollar_volume = (df["close"] * df["volume"]).tail(settings.VOLUME_SURGE_WINDOW)
+        avg_dollar_volume = float(dollar_volume.mean()) if not dollar_volume.empty else None
+        market_cap = market_data.fetch_market_cap(ticker)
+
         # Sub-scores, each in [0, 1], simple and interpretable -- real relative
         # weighting across signal families is Phase 3's job, not guessed here.
         proximity_score = (
@@ -126,6 +142,9 @@ class TechnicalBreakoutSignal:
                 "volume_surge_ratio": None if pd.isna(vol_surge) else round(float(vol_surge), 2),
                 "rsi": None if pd.isna(latest_rsi) else round(float(latest_rsi), 1),
                 "atr_pct_of_price": None if atr_pct_of_price is None else round(atr_pct_of_price, 4),
+                "atr": None if pd.isna(latest_atr) else round(float(latest_atr), 4),
+                "avg_dollar_volume": None if avg_dollar_volume is None else round(avg_dollar_volume, 2),
+                "market_cap": market_cap,
                 "golden_cross": golden_cross,
                 "close": round(float(latest_close), 2),
             },

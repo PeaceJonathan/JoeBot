@@ -11,7 +11,7 @@ import datetime as dt
 from dataclasses import dataclass, field
 from typing import Any
 
-from config import settings
+from config.settings import DEFAULT_SIGNAL_WEIGHTS, RiskProfile
 from joebot.signals.base import Signal, SignalResult
 
 
@@ -28,7 +28,7 @@ def score_ticker(
     sector: str,
     signals: list[Signal],
     as_of_date: dt.date,
-    weights: dict[str, float] = settings.DEFAULT_SIGNAL_WEIGHTS,
+    weights: dict[str, float] = DEFAULT_SIGNAL_WEIGHTS,
 ) -> RankedCandidate:
     results: dict[str, SignalResult] = {}
     weighted_sum = 0.0
@@ -50,3 +50,42 @@ def score_ticker(
 
 def rank_candidates(candidates: list[RankedCandidate]) -> list[RankedCandidate]:
     return sorted(candidates, key=lambda c: c.composite_score, reverse=True)
+
+
+def passes_risk_filter(
+    atr_pct_of_price: float | None,
+    avg_dollar_volume: float | None,
+    market_cap: float | None,
+    risk_profile: RiskProfile,
+) -> bool:
+    """The risk slider's first effect: which candidates even appear.
+
+    A None value (data unavailable) never excludes a candidate -- per this
+    project's "unknown, not bad news" convention, a data gap is not
+    grounds for filtering something out. Only a known value that actually
+    violates the profile's threshold excludes it. This is a pure predicate
+    (no I/O) so both a live scan and the dashboard re-filtering
+    already-persisted data can share it.
+    """
+    if atr_pct_of_price is not None and atr_pct_of_price > risk_profile.max_atr_pct_of_price:
+        return False
+    if avg_dollar_volume is not None and avg_dollar_volume < risk_profile.min_avg_dollar_volume:
+        return False
+    if market_cap is not None and market_cap < risk_profile.min_market_cap:
+        return False
+    return True
+
+
+def apply_risk_filter(candidates: list[RankedCandidate], risk_profile: RiskProfile) -> list[RankedCandidate]:
+    """Filters a ranked candidate list using each candidate's technical_breakout
+    metadata (atr_pct_of_price, avg_dollar_volume, market_cap), which is
+    already computed and persisted -- no extra data fetch needed here."""
+    filtered = []
+    for c in candidates:
+        tech = c.signal_results.get("technical_breakout")
+        meta = tech.metadata if tech else {}
+        if passes_risk_filter(
+            meta.get("atr_pct_of_price"), meta.get("avg_dollar_volume"), meta.get("market_cap"), risk_profile
+        ):
+            filtered.append(c)
+    return filtered
