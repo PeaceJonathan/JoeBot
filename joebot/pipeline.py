@@ -11,9 +11,14 @@ import logging
 from joebot.screener.composite import RankedCandidate
 from joebot.screener.sector_screens import run_all_sectors
 from joebot.storage.db import get_session
-from joebot.storage.models import Candidate, ScanRun, SignalHistory
+from joebot.storage.models import Candidate, FilingEvent, ScanRun, SignalHistory
 
 log = logging.getLogger(__name__)
+
+# Signal names whose metadata carries a "filings" list of raw filing dicts
+# (see joebot/signals/catalyst_sec.py and joebot/data/sec_client.py) to be
+# persisted into filings_events for Phase 3's backtester to replay.
+_FILING_SIGNAL_NAMES = ("activist_stake", "leadership_change")
 
 
 def run_daily_scan(as_of_date: dt.date | None = None) -> list[RankedCandidate]:
@@ -28,6 +33,9 @@ def run_daily_scan(as_of_date: dt.date | None = None) -> list[RankedCandidate]:
 def _persist_scan(as_of_date: dt.date, candidates: list[RankedCandidate]) -> None:
     session = get_session()
     try:
+        existing_accessions = {row[0] for row in session.query(FilingEvent.accession_no).all()}
+        seen_this_run: set[str] = set()
+
         scan_run = ScanRun(run_at=dt.datetime.utcnow(), as_of_date=as_of_date.isoformat())
         session.add(scan_run)
         session.flush()  # assigns scan_run.id
@@ -53,6 +61,23 @@ def _persist_scan(as_of_date: dt.date, candidates: list[RankedCandidate]) -> Non
                         metadata_json=result.metadata,
                     )
                 )
+
+                if signal_name in _FILING_SIGNAL_NAMES:
+                    for raw in result.metadata.get("filings", []):
+                        accession_no = raw.get("accession_no")
+                        if not accession_no or accession_no in existing_accessions or accession_no in seen_this_run:
+                            continue
+                        seen_this_run.add(accession_no)
+                        session.add(
+                            FilingEvent(
+                                ticker=raw.get("ticker", candidate.ticker),
+                                form=raw.get("form", ""),
+                                filing_date=raw.get("filing_date", as_of_date.isoformat()),
+                                accession_no=accession_no,
+                                filer_name=raw.get("filer_name"),
+                                metadata_json=raw,
+                            )
+                        )
 
         session.commit()
     finally:

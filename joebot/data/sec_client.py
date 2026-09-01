@@ -1,16 +1,34 @@
 """SEC EDGAR access via edgartools.
 
-Phase 1 scope: minimal XBRL fact lookups (revenue trend, cash) for the
-fundamental sanity filter in joebot/signals/fundamental.py. Filing feeds
-(13D/13G, 8-K) are added in Phase 2.
+Phase 1: minimal XBRL fact lookups (revenue trend, cash) for the
+fundamental sanity filter in joebot/signals/fundamental.py.
+
+Phase 2: filing feeds for catalyst detection --
+- Schedule 13D/13G (beneficial ownership >5%), for the activist-stake signal
+- 8-K Item 5.02 (officer/director departures & appointments), for the
+  leadership-change signal
+consumed by joebot/signals/catalyst_sec.py.
 
 SEC requires a real, identifying User-Agent on every request and asks
 callers to stay under 10 req/sec -- both are enforced here, not left to
 each call site.
+
+NOTE on Phase 2 field extraction: edgartools' parsed-object attribute names
+for SC 13D/13G (reporting-owner identity, stake percentage) and 8-K item
+codes were not verified against live data -- this sandbox's network policy
+blocks outbound SEC EDGAR access (see README/plan notes on the Phase 1
+verification gap). The code below tries several plausible attribute names
+defensively and fails soft to "unknown"/None rather than raising, but the
+Phase 2 verification step (backfill known catalyst events and confirm the
+right filing is flagged) still needs to run once on a machine with real
+network access, and field-name assumptions here may need adjusting then.
 """
 from __future__ import annotations
 
+import datetime as dt
 import logging
+from dataclasses import dataclass, field
+from typing import Any
 
 from config import settings
 from joebot.data.cache import DiskCache, sec_rate_limiter
@@ -18,6 +36,22 @@ from joebot.data.cache import DiskCache, sec_rate_limiter
 log = logging.getLogger(__name__)
 
 _facts_cache = DiskCache(namespace="sec_facts", ttl_seconds=24 * 3600)
+_filings_cache = DiskCache(namespace="sec_filings", ttl_seconds=12 * 3600)
+
+# Large passive institutional filers whose routine 13G filings are not a
+# "someone is taking an activist/comeback stake" signal. Matched as a
+# case-insensitive substring of the reporting owner's name. Not exhaustive --
+# expect to extend this list as false positives show up in real runs
+# (Phase 2 verification step).
+PASSIVE_FILER_KEYWORDS = (
+    "vanguard",
+    "blackrock",
+    "state street",
+    "geode capital",
+    "dimensional fund",
+    "norges bank",
+    "vident advisory",
+)
 
 _identity_set = False
 
@@ -119,3 +153,161 @@ def _latest_two_annual(df, concept_candidates: tuple[str, ...]) -> tuple[float |
         return latest, prior
 
     return None, None
+
+
+@dataclass
+class FilingEvent:
+    """One SEC filing hit relevant to a catalyst signal.
+
+    filer_name is the reporting owner (for 13D/13G) -- None if edgartools'
+    schema didn't expose it in a way this code recognizes; callers must not
+    treat "unknown filer" as "known non-activist filer" (see
+    is_likely_passive_filer, which only returns True on a positive match).
+    """
+
+    ticker: str
+    form: str  # "SC 13D", "SC 13G", or "8-K"
+    filing_date: dt.date
+    accession_no: str
+    filer_name: str | None = None
+    items: tuple[str, ...] = field(default_factory=tuple)  # 8-K item codes, e.g. ("5.02",)
+
+    def is_likely_passive_filer(self) -> bool:
+        if not self.filer_name:
+            return False
+        name = self.filer_name.lower()
+        return any(keyword in name for keyword in PASSIVE_FILER_KEYWORDS)
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "ticker": self.ticker,
+            "form": self.form,
+            "filing_date": self.filing_date.isoformat(),
+            "accession_no": self.accession_no,
+            "filer_name": self.filer_name,
+            "items": list(self.items),
+        }
+
+
+def fetch_ownership_filings(ticker: str, as_of_date: dt.date, lookback_days: int = 180) -> list[FilingEvent]:
+    """Schedule 13D/13G filings for `ticker` in the lookback window, point-in-time gated to as_of_date."""
+    cache_key = f"{ticker}_13dg"
+    cached = _filings_cache.get(cache_key)
+    if cached is None:
+        cached = _fetch_ownership_filings_uncached(ticker)
+        _filings_cache.set(cache_key, cached)
+
+    cutoff = as_of_date - dt.timedelta(days=lookback_days)
+    events = []
+    for raw in cached:
+        filing_date = dt.date.fromisoformat(raw["filing_date"])
+        if cutoff <= filing_date <= as_of_date:
+            events.append(FilingEvent(
+                ticker=ticker,
+                form=raw["form"],
+                filing_date=filing_date,
+                accession_no=raw["accession_no"],
+                filer_name=raw.get("filer_name"),
+            ))
+    return events
+
+
+def _fetch_ownership_filings_uncached(ticker: str) -> list[dict]:
+    results: list[dict] = []
+    try:
+        _ensure_identity()
+        import edgar
+
+        for form in ("SC 13D", "SC 13G"):
+            sec_rate_limiter.wait()
+            filings = edgar.Company(ticker).get_filings(form=form)
+            for filing in list(filings)[:25]:  # bounded: most recent N, not full history
+                try:
+                    results.append({
+                        "form": form,
+                        "filing_date": str(filing.filing_date),
+                        "accession_no": str(filing.accession_no),
+                        "filer_name": _extract_filer_name(filing),
+                    })
+                except Exception as exc:
+                    log.warning("Failed to parse a %s filing for %s: %s", form, ticker, exc)
+    except Exception as exc:
+        log.warning("SEC ownership filing lookup failed for %s: %s", ticker, exc)
+
+    return results
+
+
+def _extract_filer_name(filing: Any) -> str | None:
+    """Best-effort reporting-owner name extraction -- see module docstring
+    note on unverified edgartools attribute names."""
+    for attr_path in ("filer", "reporting_owner", "company"):
+        try:
+            value = getattr(filing, attr_path, None)
+            if value:
+                return str(value)
+        except Exception:
+            continue
+    return None
+
+
+def fetch_8k_leadership_events(ticker: str, as_of_date: dt.date, lookback_days: int = 180) -> list[FilingEvent]:
+    """8-K filings with Item 5.02 (officer/director changes) for `ticker`, point-in-time gated."""
+    cache_key = f"{ticker}_8k"
+    cached = _filings_cache.get(cache_key)
+    if cached is None:
+        cached = _fetch_8k_filings_uncached(ticker)
+        _filings_cache.set(cache_key, cached)
+
+    cutoff = as_of_date - dt.timedelta(days=lookback_days)
+    events = []
+    for raw in cached:
+        filing_date = dt.date.fromisoformat(raw["filing_date"])
+        items = tuple(raw.get("items", []))
+        if cutoff <= filing_date <= as_of_date and any(item.startswith("5.02") for item in items):
+            events.append(FilingEvent(
+                ticker=ticker,
+                form="8-K",
+                filing_date=filing_date,
+                accession_no=raw["accession_no"],
+                items=items,
+            ))
+    return events
+
+
+def _fetch_8k_filings_uncached(ticker: str) -> list[dict]:
+    results: list[dict] = []
+    try:
+        _ensure_identity()
+        import edgar
+
+        sec_rate_limiter.wait()
+        filings = edgar.Company(ticker).get_filings(form="8-K")
+        for filing in list(filings)[:30]:  # bounded: most recent N, not full history
+            try:
+                items = _extract_8k_items(filing)
+                results.append({
+                    "filing_date": str(filing.filing_date),
+                    "accession_no": str(filing.accession_no),
+                    "items": items,
+                })
+            except Exception as exc:
+                log.warning("Failed to parse an 8-K for %s: %s", ticker, exc)
+    except Exception as exc:
+        log.warning("SEC 8-K lookup failed for %s: %s", ticker, exc)
+
+    return results
+
+
+def _extract_8k_items(filing: Any) -> list[str]:
+    """Best-effort 8-K item-code extraction -- see module docstring note on
+    unverified edgartools attribute names."""
+    try:
+        obj = filing.obj()
+        raw_items = getattr(obj, "items", None)
+        if not raw_items:
+            return []
+        # Normalize to strings like "5.02" regardless of "Item 5.02" formatting.
+        return [str(i).replace("Item", "").strip() for i in raw_items]
+    except Exception as exc:
+        log.warning("Failed to extract 8-K items: %s", exc)
+        return []

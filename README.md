@@ -8,24 +8,44 @@ you to enter manually — originally built with Fidelity in mind, which has
 no public trading API for retail accounts. Nothing it produces is financial
 advice; verify everything yourself before acting on it.
 
-## What it does today (Phase 1)
+## What it does today (Phase 1 + 2)
 
-- Screens a configured universe of small/mid-cap tech and defense tickers
-  (`config/sectors.yaml`) using:
+- Screens a configured universe of small/mid-cap tech, defense, and
+  "faded giant" comeback tickers (`config/sectors.yaml`) using:
   - **Technical breakout signals**: proximity to the 52-week high, volume
     surge, ATR, RSI, and a 50/200-day moving-average crossover.
   - **Fundamental sanity signals**: revenue growth trend and cash position,
     pulled from SEC XBRL filings.
+  - **Activist-stake signal**: a new/recent Schedule 13D or 13G filing on
+    the ticker that isn't a routine passive-index filing — the mechanism
+    behind the GoPro-style "someone notable took a stake, stock rallies"
+    pattern.
+  - **Leadership-change signal**: a recent 8-K Item 5.02 (officer/director
+    departure or appointment) — a new exec team is a classic comeback
+    catalyst for a company that's fallen off.
 - Combines signals into a ranked, weighted composite score with full
   per-signal provenance (see "Why weights are a placeholder" below).
-- Persists every run to a local SQLite database (`data/joebot.db`) and
-  writes a markdown report to `data/reports/YYYY-MM-DD.md`.
+- Persists every run to a local SQLite database (`data/joebot.db`) —
+  candidates, per-signal scores, and raw filing hits (deduped by SEC
+  accession number so a filing isn't stored twice as it stays in the
+  lookback window) — and writes a markdown report to
+  `data/reports/YYYY-MM-DD.md`.
 
-Later phases (see the project plan) add SEC filing-based catalyst detection
-("faded giant" comeback signals — activist stakes, leadership changes),
-a rigorous walk-forward backtesting framework, sentiment and clinical-trial
-signals, sector discovery, a risk slider, a budget/position-size calculator,
-and a local Streamlit dashboard.
+Later phases (see the project plan) add a rigorous walk-forward backtesting
+framework, sentiment and clinical-trial signals, sector discovery, a risk
+slider, a budget/position-size calculator, and a local Streamlit dashboard.
+
+**Verification note on the catalyst signals (Phase 2):** this sandboxed
+development session's network policy blocks outbound SEC EDGAR/Yahoo
+Finance access, so `edgartools`' exact attribute names for a parsed 13D/13G
+filer identity and 8-K item codes were not confirmed against live data —
+`joebot/data/sec_client.py` tries several plausible attribute names
+defensively and fails soft, but this needs a real backfill check (see the
+plan's Phase 2 verification step) on a machine with normal internet access
+before trusting the catalyst signals' output. The scoring math itself
+(recency weighting, 13D vs. 13G weighting, passive-filer exclusion, and the
+filing-event dedupe-by-accession-number) is covered by fully-stubbed unit
+and integration tests and does not depend on the live fetch layer.
 
 ## Setup
 

@@ -7,12 +7,20 @@ import logging
 from joebot.data import universe
 from joebot.screener.composite import RankedCandidate, rank_candidates, score_ticker
 from joebot.signals.base import Signal
+from joebot.signals.catalyst_sec import ActivistStakeSignal, LeadershipChangeSignal
 from joebot.signals.fundamental import FundamentalSanitySignal
 from joebot.signals.technical import TechnicalBreakoutSignal
 
 log = logging.getLogger(__name__)
 
-DEFAULT_SIGNALS: list[Signal] = [TechnicalBreakoutSignal(), FundamentalSanitySignal()]
+# Catalyst signals apply across every sector -- a 13D/13G activist stake or
+# a leadership shakeup isn't confined to tech/defense/faded-giants.
+DEFAULT_SIGNALS: list[Signal] = [
+    TechnicalBreakoutSignal(),
+    FundamentalSanitySignal(),
+    ActivistStakeSignal(),
+    LeadershipChangeSignal(),
+]
 
 
 def run_all_sectors(as_of_date: dt.date, signals: list[Signal] = DEFAULT_SIGNALS) -> list[RankedCandidate]:

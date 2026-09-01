@@ -44,3 +44,20 @@ defense:
     - CVU    # CPI Aerostructures
     - ONDS   # Ondas Holdings
     - VVX    # V2X Inc
+
+faded_giants:
+  description: >
+    Formerly-large or previously-hyped companies with a plausible comeback
+    catalyst (activist stake, leadership shakeup) rather than a growth
+    thesis -- the "GoPro" pattern. Phase 2's activist_stake and
+    leadership_change signals are the primary driver here, not the
+    technical/fundamental growth screens built for the other sectors.
+  tickers:
+    - GPRO   # GoPro -- the user's own reference example
+    - PTON   # Peloton
+    - PARA   # Paramount Global (post-merger, leadership in flux)
+    - SNAP   # Snap Inc
+    - WBA    # Walgreens Boots Alliance
+    - VFC    # V.F. Corporation
+    - KSS    # Kohl's
+    - KODK   # Eastman Kodak
