@@ -2,9 +2,8 @@
 
 Phase 1 defines `candidates` and `signals_history`. Phase 2 adds
 `filings_events` (raw SEC filing hits, replayable for Phase 3's backtest).
-Phase 3 will further extend this file (backtest_runs,
-backtest_window_results, signal_attribution) rather than creating parallel
-storage.
+Phase 3 adds `backtest_runs` and `signal_attributions` so the dashboard's
+backtest view (Phase 5) can browse past runs without re-running them.
 """
 from __future__ import annotations
 
@@ -81,3 +80,43 @@ class FilingEvent(Base):
     filer_name: Mapped[str | None] = mapped_column(String, nullable=True)
     metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     discovered_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+
+
+class BacktestRun(Base):
+    """One walk-forward backtest invocation (scripts/run_backtest.py)."""
+
+    __tablename__ = "backtest_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    run_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
+    start_date: Mapped[str] = mapped_column(String)  # ISO date
+    end_date: Mapped[str] = mapped_column(String)  # ISO date
+    step_days: Mapped[int] = mapped_column(Integer)
+    calibration_cutoff: Mapped[str] = mapped_column(String)  # ISO date
+    n_records: Mapped[int] = mapped_column(Integer)
+
+    attributions: Mapped[list["SignalAttributionRecord"]] = relationship(back_populates="backtest_run")
+
+
+class SignalAttributionRecord(Base):
+    """One signal family's evaluation-fold attribution result from one backtest run.
+
+    This -- not the calibration fold, and never a single anecdote -- is
+    what DEFAULT_SIGNAL_WEIGHTS changes must cite, per this project's hard
+    rule against data-snooping.
+    """
+
+    __tablename__ = "signal_attributions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    backtest_run_id: Mapped[int] = mapped_column(ForeignKey("backtest_runs.id"))
+    signal_name: Mapped[str] = mapped_column(String)
+    horizon: Mapped[str] = mapped_column(String)  # "short" or "long"
+    n_observations: Mapped[int] = mapped_column(Integer)
+    n_dates: Mapped[int] = mapped_column(Integer)
+    top_half_mean_return: Mapped[float | None] = mapped_column(Float, nullable=True)
+    bottom_half_mean_return: Mapped[float | None] = mapped_column(Float, nullable=True)
+    spread: Mapped[float | None] = mapped_column(Float, nullable=True)
+    baseline_mean_return: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+    backtest_run: Mapped[BacktestRun] = relationship(back_populates="attributions")

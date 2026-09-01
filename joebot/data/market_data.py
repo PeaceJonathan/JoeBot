@@ -8,6 +8,7 @@ re-hit external services for data that doesn't change intraday.
 """
 from __future__ import annotations
 
+import datetime as dt
 import logging
 
 import pandas as pd
@@ -54,6 +55,26 @@ def fetch_price_history(ticker: str, lookback_days: int = settings.LOOKBACK_DAYS
     to_store["date"] = to_store["date"].astype(str)
     _price_cache.set(cache_key, to_store.to_dict(orient="records"))
     return df
+
+
+def fetch_price_history_covering(
+    ticker: str, as_of_date: dt.date, trailing_days: int = settings.LOOKBACK_DAYS
+) -> pd.DataFrame:
+    """Price history guaranteed to cover [as_of_date - trailing_days, as_of_date],
+    even when as_of_date is well in the past.
+
+    fetch_price_history's lookback_days always counts back from *today*
+    (yfinance fetches a trailing window ending now) -- a plain call with the
+    default ~1-year lookback would silently return no data at all for an
+    as_of_date from a multi-year-old backtest window, since that window
+    wouldn't even be inside the fetched range. This computes how far in the
+    past as_of_date itself is and extends the lookback to compensate, so
+    every signal and the backtester's point_in_time module can share one
+    fetch path regardless of whether as_of_date is today or years ago.
+    """
+    days_since_as_of = max(0, (dt.date.today() - as_of_date).days)
+    lookback_days = trailing_days + days_since_as_of
+    return fetch_price_history(ticker, lookback_days=lookback_days)
 
 
 def _fetch_from_yfinance(ticker: str, lookback_days: int) -> pd.DataFrame | None:

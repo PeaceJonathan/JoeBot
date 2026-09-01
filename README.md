@@ -31,9 +31,39 @@ advice; verify everything yourself before acting on it.
   lookback window) — and writes a markdown report to
   `data/reports/YYYY-MM-DD.md`.
 
-Later phases (see the project plan) add a rigorous walk-forward backtesting
-framework, sentiment and clinical-trial signals, sector discovery, a risk
-slider, a budget/position-size calculator, and a local Streamlit dashboard.
+## Backtesting (Phase 3)
+
+```bash
+python scripts/run_backtest.py --years 3 --step-days 30
+```
+
+Walks forward through the tracked universe (including a curated
+`data/delisted_universe.csv` of known small/mid-cap delistings/bankruptcies,
+so results aren't purely survivorship-biased toward names still trading
+today), scoring every signal at each date using only data on or before that
+date, then reports whether each signal family's score actually predicted
+forward returns -- split into a calibration fold (first half of dates) and
+an evaluation fold (second half), so any conclusion is out-of-sample. Per
+this project's hard rule, `DEFAULT_SIGNAL_WEIGHTS` may only be changed
+based on an evaluation-fold result from this command, never hand-tuned.
+
+**Read `n_observations` alongside every result.** Catalyst-signal events
+(activist stakes, leadership changes) are rare in a small tracked universe;
+a low n means "not enough evidence yet," not "the signal doesn't work."
+
+**Known limitations, stated plainly:**
+- `data/delisted_universe.csv` is a small, manually curated, explicitly
+  incomplete seed list -- not a comprehensive point-in-time universe (that
+  requires paid data like Sharadar/Norgate/CRSP). It needs ongoing manual
+  upkeep.
+- `fundamental_sanity`'s XBRL fact lookup doesn't gate by each fact's
+  actual filing/acceptance date, only by fiscal period -- so its backtest
+  attribution carries a residual look-ahead risk the other three signal
+  families don't have (see `joebot/backtest/point_in_time.py`'s docstring).
+
+Later phases (see the project plan) add sentiment and clinical-trial
+signals, sector discovery, a risk slider, a budget/position-size
+calculator, and a local Streamlit dashboard.
 
 **Verification note on the catalyst signals (Phase 2):** this sandboxed
 development session's network policy blocks outbound SEC EDGAR/Yahoo

@@ -1,0 +1,6 @@
+ticker,sector,company_name,active_from,active_to,event_type,notes
+RIDE,tech,Lordstown Motors,2020-10-23,2023-06-27,bankruptcy,EV maker; Chapter 11 filed 2023-06-27
+VORB,defense,Virgin Orbit Holdings,2021-12-30,2023-04-04,bankruptcy,Air-launch rocket company; Chapter 11 filed 2023-04-04
+QNGY,tech,Quanergy Systems,2022-02-08,2022-12-13,bankruptcy,Lidar sensor maker; Chapter 11 filed 2022-12-13
+BBBY,faded_giants,Bed Bath & Beyond,1992-06-01,2023-04-23,bankruptcy,Chapter 11 filed 2023-04-23; brand later relaunched under different ownership
+EVGO,tech,Enjoy Technology,2021-10-28,2022-06-30,bankruptcy,EV retail/delivery model; Chapter 11 filed 2022-06-30

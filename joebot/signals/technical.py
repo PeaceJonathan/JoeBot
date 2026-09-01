@@ -79,7 +79,7 @@ class TechnicalBreakoutSignal:
 
     def score(self, ticker: str, as_of_date: dt.date) -> SignalResult:
         try:
-            df = market_data.fetch_price_history(ticker)
+            df = market_data.fetch_price_history_covering(ticker, as_of_date)
         except market_data.MarketDataError as exc:
             return SignalResult(score=0.0, confidence=0.0, metadata={"error": str(exc)})
 
