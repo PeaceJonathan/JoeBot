@@ -37,3 +37,12 @@ class Signal(Protocol):
 
     def score(self, ticker: str, as_of_date: dt.date) -> SignalResult:
         ...
+
+
+# Signals whose primary driver is a single binary/event-risk-heavy fact (an
+# activist stake, a leadership shakeup, a clinical trial readout) rather
+# than a steady trend. Defined here (not in joebot/reporting/narrative.py
+# or joebot/screener/composite.py, both of which need it) since this is
+# the shared, dependency-free base module both of those already import
+# from -- putting it in either one would create a circular import.
+BINARY_CATALYST_SIGNALS = frozenset({"activist_stake", "leadership_change", "clinical_trial"})

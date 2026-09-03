@@ -18,6 +18,7 @@ _NUMERIC_FIELDS = (
     "base_risk_fraction",
     "sizing_aggressiveness_multiplier",
     "max_position_fraction",
+    "binary_catalyst_tolerance",
 )
 
 

@@ -18,13 +18,7 @@ import dataclasses
 from typing import Callable
 
 from joebot.screener.composite import RankedCandidate
-from joebot.signals.base import SignalResult
-
-# Signals whose primary driver is a single binary/event-risk-heavy fact
-# (an activist stake, a leadership shakeup, a clinical trial readout)
-# rather than a steady trend -- used both for risk bullets here and for
-# the risk slider's signal-type gating in joebot/screener/composite.py.
-BINARY_CATALYST_SIGNALS = frozenset({"activist_stake", "leadership_change", "clinical_trial"})
+from joebot.signals.base import BINARY_CATALYST_SIGNALS, SignalResult
 
 # A signal must clear this score to be worth a "why it appeared" bullet at
 # all -- a signal that fired weakly (or not at all) shouldn't clutter the

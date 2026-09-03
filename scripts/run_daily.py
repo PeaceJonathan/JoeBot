@@ -54,14 +54,17 @@ def main() -> None:
     for c in filtered:
         tech_signal = c.signal_results.get("technical_breakout")
         tech_meta = tech_signal.metadata if tech_signal else {}
-        ranked_tuples.append((c.ticker, tech_meta.get("close"), tech_meta.get("atr")))
+        ranked_tuples.append((c.ticker, tech_meta.get("close"), tech_meta.get("atr"), c.composite_score))
 
-    suggestions = allocate_budget(ranked_tuples, budget=args.budget, risk_profile=risk_profile)
-    log.info("Position sizing: %d suggestions against a $%.2f budget", len(suggestions), args.budget)
+    allocation = allocate_budget(ranked_tuples, budget=args.budget, risk_profile=risk_profile)
+    log.info(
+        "Position sizing: %d suggestions, $%.2f allocated, $%.2f left in reserve (budget $%.2f)",
+        len(allocation.suggestions), allocation.allocated, allocation.reserved_cash, args.budget,
+    )
 
     report_path = write_report(
         as_of_date, candidates,
-        risk_profile=risk_profile, budget=args.budget, position_suggestions=suggestions,
+        risk_profile=risk_profile, budget=args.budget, allocation=allocation,
     )
     log.info("Report written to %s", report_path)
 

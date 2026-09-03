@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from config.settings import DEFAULT_SIGNAL_WEIGHTS, RiskProfile
-from joebot.signals.base import Signal, SignalResult
+from joebot.signals.base import BINARY_CATALYST_SIGNALS, Signal, SignalResult
 
 
 @dataclass
@@ -52,11 +52,25 @@ def rank_candidates(candidates: list[RankedCandidate]) -> list[RankedCandidate]:
     return sorted(candidates, key=lambda c: c.composite_score, reverse=True)
 
 
+def is_binary_catalyst_led(signal_scores: dict[str, float]) -> bool:
+    """True if the highest-scoring signal for this candidate is a
+    binary/event-risk one (see joebot/signals/base.py::BINARY_CATALYST_SIGNALS)
+    -- an activist stake, a leadership shakeup, or a clinical trial readout
+    -- rather than a steady-trend one. Used by the risk slider to decide
+    whether this *kind* of opportunity is even eligible at a given risk
+    level, not just whether its numbers clear a threshold."""
+    if not signal_scores:
+        return False
+    top_signal = max(signal_scores, key=signal_scores.get)
+    return top_signal in BINARY_CATALYST_SIGNALS and signal_scores[top_signal] > 0
+
+
 def passes_risk_filter(
     atr_pct_of_price: float | None,
     avg_dollar_volume: float | None,
     market_cap: float | None,
     risk_profile: RiskProfile,
+    signal_scores: dict[str, float] | None = None,
 ) -> bool:
     """The risk slider's first effect: which candidates even appear.
 
@@ -66,6 +80,13 @@ def passes_risk_filter(
     violates the profile's threshold excludes it. This is a pure predicate
     (no I/O) so both a live scan and the dashboard re-filtering
     already-persisted data can share it.
+
+    signal_scores (ticker's per-signal composite contributions), if given,
+    also gates on opportunity *type*: a conservative risk_profile
+    (binary_catalyst_tolerance < 0.5) excludes any candidate whose top
+    signal is a binary-catalyst one -- a conservative investor shouldn't
+    be shown a turnaround special situation at all, not just a size-capped
+    version of one.
     """
     if atr_pct_of_price is not None and atr_pct_of_price > risk_profile.max_atr_pct_of_price:
         return False
@@ -73,19 +94,24 @@ def passes_risk_filter(
         return False
     if market_cap is not None and market_cap < risk_profile.min_market_cap:
         return False
+    if signal_scores and risk_profile.binary_catalyst_tolerance < 0.5 and is_binary_catalyst_led(signal_scores):
+        return False
     return True
 
 
 def apply_risk_filter(candidates: list[RankedCandidate], risk_profile: RiskProfile) -> list[RankedCandidate]:
     """Filters a ranked candidate list using each candidate's technical_breakout
-    metadata (atr_pct_of_price, avg_dollar_volume, market_cap), which is
-    already computed and persisted -- no extra data fetch needed here."""
+    metadata (atr_pct_of_price, avg_dollar_volume, market_cap) plus its full
+    per-signal score breakdown for the binary-catalyst-type gate -- all
+    already computed and persisted, no extra data fetch needed here."""
     filtered = []
     for c in candidates:
         tech = c.signal_results.get("technical_breakout")
         meta = tech.metadata if tech else {}
+        signal_scores = {name: r.score for name, r in c.signal_results.items()}
         if passes_risk_filter(
-            meta.get("atr_pct_of_price"), meta.get("avg_dollar_volume"), meta.get("market_cap"), risk_profile
+            meta.get("atr_pct_of_price"), meta.get("avg_dollar_volume"), meta.get("market_cap"),
+            risk_profile, signal_scores,
         ):
             filtered.append(c)
     return filtered

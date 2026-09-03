@@ -1,22 +1,31 @@
 # JoeBot
 
-A personal stock breakout scanner and decision-support tool.
+A personal market-opportunity research tool: it finds small/mid-cap
+candidates showing a meaningful change, explains *why* in plain English
+with the specific evidence behind it, flags what could go wrong, and
+suggests a position size — never a bare "BUY XYZ."
 
-**JoeBot never places trades and never connects to any brokerage.** It
-ranks candidate tickers and suggests position sizes for you to enter
-manually — originally built with Fidelity in mind, which has no public
-trading API for retail accounts. Nothing it produces is financial advice;
-verify everything yourself before acting on it. Every signal's usefulness
-is only as good as its own backtest evidence (see "Backtesting" below) —
-treat a high score as a lead to research, not a conclusion.
+**JoeBot never places trades and never connects to any brokerage.** You
+execute manually, with whatever order type you prefer — a stock/ETF market
+order fills promptly, it isn't restricted to once-daily execution the way
+some fund orders are, so there's no special timing dance to do around
+this. Nothing JoeBot produces is financial advice; verify everything
+yourself. Every signal's usefulness is only as good as its own backtest
+evidence (see "Backtesting" below) — treat a high score as a lead to
+research, not a conclusion.
+
+This deliberately does **not** try to be another Finviz/TradingView/
+StockAnalysis — those already do general screening extremely well. JoeBot
+is the layer above a screener: given a candidate, why does it matter
+*right now*, and how much of your money is that worth risking.
 
 ## What it does
 
-**Screens** a configured universe of small/mid-cap tickers
-(`config/sectors.yaml`: tech, defense, "faded giant" comebacks, pharma —
-plus four unvalidated candidate sectors, see "Sector discovery" below)
-using six signals, each independently scored and fully visible in the
-output (never just a black-box composite number):
+**Screens** the `status: active` sectors in `config/sectors.yaml` (tech,
+defense, "faded giant" comebacks, pharma — plus four unvalidated candidate
+sectors, see "Sector discovery" below) using eight signals, each
+independently scored and fully visible in the output — never just a
+black-box composite number:
 
 | Signal | What it looks for |
 |---|---|
@@ -26,19 +35,48 @@ output (never just a black-box composite number):
 | `leadership_change` | A recent 8-K Item 5.02 (officer/director departure or appointment) — a classic catalyst for a company that's fallen off |
 | `sentiment_reddit` | Mention-volume and mention-velocity across a handful of investing subreddits — one input among many, never a standalone buy signal |
 | `clinical_trial` | A recently-updated late-phase (III/IV) trial for a pharma ticker — a proxy for "approaching a readout," not a prediction of the trial's outcome |
+| `gov_contract` | A new government contract award, sized relative to the company's own market cap — the "small defense company + huge contract" pattern |
+| `patent_activity` | Patent-filing momentum (recent vs. prior filing rate) — evidence worth a look, deliberately not a claim about IP quality; smallest default weight of any signal, see below |
 
-These combine into a **weighted composite score** (`config/settings.py::DEFAULT_SIGNAL_WEIGHTS`)
-with full per-signal provenance persisted alongside it — see "Why the
-signal weights are a placeholder" below before trusting the weighting.
+**Explains why**, not just scores. Every signal's raw evidence
+(`SignalResult.metadata`) feeds `joebot/reporting/narrative.py`, which
+renders each top candidate as a card:
+
+```
+### XYZ (defense) -- score 0.78
+**Verdict:** High conviction -- investigate further.
+**Why it appeared:**
+- Technical: trading within 5.0% of its 52-week high; volume running 2.1x its 20-day average.
+- Government: a new contract award from Department of Defense worth $140,000,000 was recorded.
+**What could go wrong:**
+- High volatility -- ATR is 9.0% of price.
+- Thin liquidity -- average dollar volume is only $800,000/day.
+```
+
+These combine into a **weighted composite score**
+(`config/settings.py::DEFAULT_SIGNAL_WEIGHTS`) with full per-signal
+provenance persisted alongside it — see "Why the signal weights are a
+placeholder" below before trusting the weighting.
 
 A **risk slider** (0 = conservative .. 100 = aggressive,
-`joebot/risk/profile.py`) does two things at once: it filters which
-candidates even appear (market-cap floor, volatility ceiling, liquidity
-floor) and it scales position sizing. A **budget calculator**
-(`joebot/risk/position_sizing.py`) takes a one-off dollar amount — not tied
-to any daily/weekly/monthly cadence — and sizes ATR-based positions across
-the risk-filtered, ranked candidates, capped so no single name dominates
-the budget and so the total never exceeds what you entered.
+`joebot/risk/profile.py`) does three things at once:
+1. Filters candidates by market-cap floor, volatility ceiling, and
+   liquidity floor.
+2. **Gates opportunity *type***, not just size — below the conservative→
+   moderate crossover, any candidate whose single highest-scoring signal is
+   a binary/event-risk one (`activist_stake`, `leadership_change`,
+   `clinical_trial` — see `joebot/signals/base.py::BINARY_CATALYST_SIGNALS`)
+   is excluded outright. A conservative investor isn't shown a smaller
+   version of a turnaround special situation; they aren't shown it at all.
+3. Scales position sizing (below).
+
+A **budget calculator** (`joebot/risk/position_sizing.py`) takes a one-off
+dollar amount — not tied to any daily/weekly/monthly cadence — and sizes
+ATR-based positions across the risk-filtered, ranked candidates. Each
+candidate needs a minimum composite score (a conviction floor, adjustable
+in the dashboard) to receive any money at all; if too few candidates clear
+it, **the leftover budget stays in cash** rather than being spread across
+mediocre picks just to "use" the whole allocation.
 
 A **walk-forward backtester** (`joebot/backtest/`) evaluates whether each
 signal family actually predicts forward returns, out-of-sample, before any
@@ -65,6 +103,9 @@ Edit `.env`:
 - `REDDIT_CLIENT_ID` / `REDDIT_CLIENT_SECRET` — optional; without these,
   `sentiment_reddit` just scores 0 for everything rather than erroring
   (create a Reddit app at <https://www.reddit.com/prefs/apps>).
+- `PATENTSVIEW_API_KEY` — optional; same graceful-no-op pattern. Free but
+  requires registration at <https://patentsview.org/apis/keyrequest> (the
+  old keyless PatentsView endpoint was retired in 2026).
 
 ## Running it
 
@@ -74,9 +115,10 @@ Edit `.env`:
 python scripts/run_daily.py --budget 10000 --risk-slider 50
 ```
 
-Writes `data/reports/<today>.md` with the ranked candidates and a
-position-sizing suggestion table, and records everything in
-`data/joebot.db`.
+Writes `data/reports/<today>.md` with the ranked candidates, narrative
+"why it appeared" cards for the top opportunities, and a position-sizing
+table (with the reserved-cash amount shown explicitly) — and records
+everything in `data/joebot.db`.
 
 ```cron
 0 7 * * 1-5 cd /path/to/JoeBot && /path/to/JoeBot/.venv/bin/python scripts/run_daily.py >> data/reports/cron.log 2>&1
@@ -90,10 +132,11 @@ streamlit run dashboard/app.py
 
 Three views: **Today's Picks** (the latest scan, filtered live by the
 sidebar risk slider against already-persisted data — no re-fetch on every
-slider move), **Budget Calculator** (enter a dollar amount, get sized
-positions), and **Backtest Results** (browse past `scripts/run_backtest.py`
-runs). A "Re-run scan now" button in the sidebar calls the identical
-`pipeline.run_daily_scan()` the cron job uses.
+slider move — with a per-ticker narrative panel), **Budget Calculator**
+(enter a dollar amount and a conviction floor, get sized positions plus
+the cash reserve), and **Backtest Results** (browse past
+`scripts/run_backtest.py` runs). A "Re-run scan now" button in the sidebar
+calls the identical `pipeline.run_daily_scan()` the cron job uses.
 
 **Backtesting:**
 
@@ -114,7 +157,11 @@ and an evaluation fold, so any conclusion is out-of-sample.
 result from this command, per this project's hard rule against
 data-snooping — never hand-tuned. **Read `n_observations` alongside every
 result** — catalyst-signal events are rare in a small universe, and a low
-n means "not enough evidence yet," not "the signal doesn't work."
+n means "not enough evidence yet," not "the signal doesn't work." If this
+grows into testing combinations of signals (not just each one alone),
+correct for multiple comparisons or require replication across
+non-overlapping periods — testing enough combinations will eventually
+produce one that looks great by chance alone.
 
 **Tests:**
 
@@ -122,11 +169,12 @@ n means "not enough evidence yet," not "the signal doesn't work."
 pytest
 ```
 
-61 unit tests, all deterministic and network-free (hand-computed values,
-fixture data via monkeypatch) — technical indicators, catalyst/sentiment/
-clinical-trial scoring math, point-in-time forward-return edge cases
-(data gaps, bankruptcies), signal attribution, risk-profile interpolation,
-and position sizing.
+91 unit tests, all deterministic and network-free (hand-computed values,
+fixture data via monkeypatch) — technical indicators, every signal's
+scoring math, narrative bullet formatters, point-in-time forward-return
+edge cases (data gaps, bankruptcies), signal attribution, risk-profile
+interpolation (including the opportunity-type gate), and budget allocation
+(including the conviction floor/cash-reserve behavior).
 
 ## Sector discovery
 
@@ -137,7 +185,8 @@ backtester's universe by construction. Validate one with
 `python scripts/run_backtest.py --sector <name>`, look at the
 evaluation-fold spread, and only then manually flip its `status` to
 `active`. Don't promote a sector on vibes — that defeats the point of
-having a backtester at all.
+having a backtester at all. This is deliberately generic: nothing about
+the pipeline is hard-coded to today's five sector names.
 
 ## Data sources (all free-tier)
 
@@ -147,31 +196,46 @@ having a backtester at all.
 | Fundamentals/filings | SEC EDGAR via `edgartools` | Free, official, no key. Requires a real `SEC_USER_AGENT`, stays under 10 req/sec. |
 | Sentiment | Reddit API via `praw` | Free at ~100 req/min for non-commercial personal use. StockTwits' API is frozen to new developers, so it's not used. |
 | Clinical trials | ClinicalTrials.gov API | Free, public, no key. |
+| Government contracts | USAspending.gov API | Free, public, no key. |
+| Patents | USPTO PatentsView PatentSearch API | Free but requires a registered key (see Setup) — the old keyless endpoint was retired in 2026. |
+
+General-purpose screeners (Finviz, TradingView, StockAnalysis, MarketBeat)
+and investor-tracking tools (Dataroma) are good free tools JoeBot
+deliberately doesn't try to replace — use them alongside this, not instead
+of it, if you want that kind of broad screening.
 
 ## Known limitations (stated plainly, not hidden)
 
 - **No true point-in-time fundamentals or delisted-ticker universe.**
   `data/delisted_universe.csv` is a small, manually curated, explicitly
   incomplete seed list — not a comprehensive survivorship-bias fix (that
-  needs paid data like Sharadar/Norgate/CRSP). `fundamental_sanity`'s XBRL
-  lookup gates by fiscal period, not actual filing/acceptance date, so its
-  backtest attribution carries a residual look-ahead risk the other five
-  signal families don't have (see `joebot/backtest/point_in_time.py`).
-- **`edgartools` and PRAW/ClinicalTrials.gov field-name assumptions are
-  unverified against live data.** This project was built in a sandboxed
-  environment whose network policy blocks outbound SEC EDGAR, Yahoo
-  Finance, Reddit, and ClinicalTrials.gov access. Every data-fetching
-  module fails soft and is unit-tested on fixture data, and the
-  entire pipeline was verified end-to-end with fully-stubbed network
+  needs paid data like Sharadar/Norgate/CRSP, or Alpha Vantage's
+  listing-status endpoint as a free partial upgrade worth evaluating
+  later). `fundamental_sanity`'s XBRL lookup gates by fiscal period, not
+  actual filing/acceptance date, so its backtest attribution carries a
+  residual look-ahead risk the other signal families don't have (see
+  `joebot/backtest/point_in_time.py`).
+- **Several data clients' exact field names are unverified against live
+  data.** This project was built in a sandboxed environment whose network
+  policy blocks outbound SEC EDGAR, Yahoo Finance, Reddit,
+  ClinicalTrials.gov, USAspending.gov, and PatentsView access. Every
+  data-fetching module fails soft and is unit-tested on fixture data, and
+  the entire pipeline was verified end-to-end with fully-stubbed network
   calls (including a synthetic-data check that the backtester correctly
-  recovers a known signal-to-return relationship) — but the *real* field
-  names/response shapes for 13D/13G filer identity, 8-K item codes, and
-  ClinicalTrials.gov's JSON structure need a live smoke test on a machine
-  with normal internet access before you trust their output. Start there.
+  recovers a known signal-to-return relationship, and a live risk-slider
+  sweep confirming the opportunity-type gate works) — but the *real*
+  field names/response shapes for several of these APIs need a live smoke
+  test on a machine with normal internet access before you trust their
+  output. Start there.
 - **Sample sizes will be small.** Catalyst-signal events (activist stakes,
-  leadership changes) are rare in a small tracked universe — don't overfit
-  the composite screener to one anecdote (the GoPro example that inspired
-  this project is one data point, not a validated pattern, until backtested).
+  leadership changes, contract awards) are rare in a small tracked
+  universe — don't overfit the composite screener to one anecdote (the
+  GoPro example that inspired this project is one data point, not a
+  validated pattern, until backtested).
+- **`patent_activity` measures filing momentum only, not IP quality**
+  (citations, claim breadth, competitive relevance) — that's a hard
+  problem this doesn't attempt, and it's why the signal's confidence is
+  capped and its default weight is the smallest of any signal.
 - **This is decision support only**, at every phase — it never places,
   sizes-for-auto-execution, or connects to any brokerage order API.
 
@@ -187,16 +251,17 @@ fold) — never hand-tuned on the full history, to avoid data-snooping bias.
 ```
 config/          settings, sectors.yaml, pharma sponsor crosswalk
 joebot/
-  data/          external data clients (market data, SEC, Reddit, clinical trials) + shared cache/rate-limiter
+  data/          external data clients (market data, SEC, Reddit, clinical trials,
+                 gov contracts, patents) + shared cache/rate-limiter
   signals/       one module per signal family, all behind a common Signal interface
   screener/      combines signals into a ranked, risk-filtered candidate list
-  risk/          risk-slider profile + ATR-based budget allocator
+  risk/          risk-slider profile + ATR-based budget allocator (with cash reserve)
   backtest/      walk-forward engine, point-in-time guardrails, signal attribution, metrics
   storage/       SQLite models + read queries
-  reporting/     daily markdown report writer
+  reporting/     narrative "why it appeared" cards + daily markdown report writer
   pipeline.py    shared orchestration seam for the CLI and the dashboard
 scripts/         run_daily.py (cron), run_backtest.py (CLI)
 dashboard/       Streamlit app (today / budget / backtest views)
-tests/unit/      61 deterministic, network-free tests
+tests/unit/      91 deterministic, network-free tests
 data/            delisted_universe.csv (tracked), joebot.db + reports + cache (gitignored)
 ```

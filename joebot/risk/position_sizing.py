@@ -13,6 +13,13 @@ from config.settings import RiskProfile
 
 ATR_STOP_MULTIPLIER = 2.0
 
+# A candidate must clear this composite score to receive any budget at
+# all. Per user feedback: if JoeBot only finds two genuinely good
+# opportunities, it must not manufacture eight mediocre ones just because
+# there's budget left -- leaving money in cash is a legitimate output, not
+# a failure to "use" the whole allocation.
+DEFAULT_MIN_COMPOSITE_SCORE = 0.5
+
 
 @dataclasses.dataclass
 class PositionSuggestion:
@@ -22,6 +29,17 @@ class PositionSuggestion:
     entry_price: float
     stop_price: float
     stop_distance: float
+
+
+@dataclasses.dataclass
+class BudgetAllocation:
+    suggestions: list[PositionSuggestion]
+    budget: float
+    reserved_cash: float  # budget minus what was actually allocated -- may be > 0 by design, see DEFAULT_MIN_COMPOSITE_SCORE
+
+    @property
+    def allocated(self) -> float:
+        return self.budget - self.reserved_cash
 
 
 def suggest_position(
@@ -68,30 +86,41 @@ def suggest_position(
 
 
 def allocate_budget(
-    ranked_candidates: list[tuple[str, float | None, float | None]],
+    ranked_candidates: list[tuple[str, float | None, float | None, float]],
     budget: float,
     risk_profile: RiskProfile,
-) -> list[PositionSuggestion]:
+    min_composite_score: float = DEFAULT_MIN_COMPOSITE_SCORE,
+) -> BudgetAllocation:
     """Allocates `budget` across `ranked_candidates` -- a list of
-    (ticker, price, atr) tuples the caller has already ranked best-first by
-    composite score.
+    (ticker, price, atr, composite_score) tuples the caller has already
+    ranked best-first by composite score.
 
-    Each candidate's ideal size is computed independently against the full
-    budget (per suggest_position's fixed-fractional formula); this function
-    then walks the ranked list consuming the budget, scaling a position
-    down to fit what's left rather than dropping it outright, and stopping
-    once the budget is exhausted rather than forcing full deployment into
-    weak picks further down the list. Because candidates are pre-ranked,
-    higher-scored names get first claim on the budget -- this is how "size
-    proportional to composite score" is achieved without double-counting
-    score in the per-trade risk math itself.
+    Two gates on getting any money at all: composite_score must clear
+    min_composite_score (a real conviction floor -- weak candidates get
+    nothing, and the budget goes unspent rather than being forced out the
+    door), and suggest_position must be able to size a position at all
+    (real price/ATR data). Each candidate's ideal size is computed
+    independently against the full budget (per suggest_position's
+    fixed-fractional formula); this function then walks the ranked list
+    consuming the budget, scaling a position down to fit what's left
+    rather than dropping it outright, and stopping once the budget is
+    exhausted. Because candidates are pre-ranked, higher-scored names get
+    first claim on the budget -- this is how "size proportional to
+    composite score" is achieved without double-counting score in the
+    per-trade risk math itself.
+
+    Returns a BudgetAllocation, not a bare list -- reserved_cash is a
+    first-class part of the answer, not something the caller has to
+    remember to compute (budget - sum(dollar_amounts)).
     """
     suggestions: list[PositionSuggestion] = []
     remaining = budget
 
-    for ticker, price, atr in ranked_candidates:
+    for ticker, price, atr, composite_score in ranked_candidates:
         if remaining <= 0:
             break
+        if composite_score < min_composite_score:
+            continue
 
         suggestion = suggest_position(ticker, price, atr, budget, risk_profile)
         if suggestion is None:
@@ -110,4 +139,4 @@ def allocate_budget(
         suggestions.append(suggestion)
         remaining -= suggestion.dollar_amount
 
-    return suggestions
+    return BudgetAllocation(suggestions=suggestions, budget=budget, reserved_cash=remaining)

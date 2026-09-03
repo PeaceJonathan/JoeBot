@@ -1,14 +1,15 @@
 """Budget/position-sizing calculator view: "how much do I invest" for a
 one-off deployable budget, not tied to any daily/weekly/monthly cadence --
 you open this whenever you want to deploy money, enter the amount, and it
-sizes positions across today's risk-filtered picks.
+sizes positions across today's risk-filtered picks. Leaving money in cash
+is a legitimate outcome here, not a bug -- see DEFAULT_MIN_COMPOSITE_SCORE.
 """
 from __future__ import annotations
 
 import streamlit as st
 
 from config import settings
-from joebot.risk.position_sizing import allocate_budget
+from joebot.risk.position_sizing import DEFAULT_MIN_COMPOSITE_SCORE, allocate_budget
 from joebot.risk.profile import get_risk_profile
 from joebot.screener.composite import passes_risk_filter
 from joebot.storage.queries import latest_candidates
@@ -27,16 +28,26 @@ def render(risk_slider_value: float) -> None:
         st.info("No scan has been run yet. Run `python scripts/run_daily.py` first.")
         return
 
-    budget = st.number_input(
-        "Budget to deploy ($)", min_value=0.0, value=settings.DEFAULT_BUDGET, step=100.0
-    )
+    col1, col2 = st.columns(2)
+    with col1:
+        budget = st.number_input("Budget to deploy ($)", min_value=0.0, value=settings.DEFAULT_BUDGET, step=100.0)
+    with col2:
+        min_conviction = st.slider(
+            "Minimum conviction to receive any budget", min_value=0.0, max_value=1.0,
+            value=DEFAULT_MIN_COMPOSITE_SCORE, step=0.05,
+            help="A candidate's composite score must clear this to get any money. "
+                 "If nothing clears it, the budget stays in cash -- JoeBot won't "
+                 "manufacture mediocre picks just to spend the full amount.",
+        )
 
     risk_profile = get_risk_profile(risk_slider_value)
     filtered = []
     for c in candidates:
         tech = c.signals.get("technical_breakout", {}).get("metadata", {})
+        signal_scores = {name: s["score"] for name, s in c.signals.items()}
         if passes_risk_filter(
-            tech.get("atr_pct_of_price"), tech.get("avg_dollar_volume"), tech.get("market_cap"), risk_profile
+            tech.get("atr_pct_of_price"), tech.get("avg_dollar_volume"), tech.get("market_cap"),
+            risk_profile, signal_scores,
         ):
             filtered.append((c, tech))
 
@@ -44,15 +55,18 @@ def render(risk_slider_value: float) -> None:
         st.warning("No risk-filtered candidates (or a zero budget) -- nothing to size.")
         return
 
-    ranked_tuples = [(c.ticker, tech.get("close"), tech.get("atr")) for c, tech in filtered]
-    suggestions = allocate_budget(ranked_tuples, budget=budget, risk_profile=risk_profile)
+    ranked_tuples = [(c.ticker, tech.get("close"), tech.get("atr"), c.composite_score) for c, tech in filtered]
+    allocation = allocate_budget(ranked_tuples, budget=budget, risk_profile=risk_profile, min_composite_score=min_conviction)
 
-    if not suggestions:
-        st.warning("No candidate had enough price/ATR data to size a position.")
+    st.metric("Allocated", f"${allocation.allocated:,.2f}", f"of ${budget:,.2f} budget")
+    st.metric("Reserved (cash)", f"${allocation.reserved_cash:,.2f}")
+
+    if not allocation.suggestions:
+        st.warning(
+            "No candidate cleared the conviction floor with enough data to size a "
+            "position -- the full budget stays in cash. That's a legitimate outcome."
+        )
         return
-
-    total_spent = sum(s.dollar_amount for s in suggestions)
-    st.metric("Allocated", f"${total_spent:,.2f}", f"of ${budget:,.2f} budget")
 
     st.dataframe(
         [
@@ -63,7 +77,7 @@ def render(risk_slider_value: float) -> None:
                 "Entry": round(s.entry_price, 2),
                 "Stop": round(s.stop_price, 2),
             }
-            for s in suggestions
+            for s in allocation.suggestions
         ],
         width="stretch",
         hide_index=True,
@@ -71,7 +85,6 @@ def render(risk_slider_value: float) -> None:
 
     st.warning(
         "This is a manual-entry suggestion for your own brokerage. JoeBot "
-        "never places an order -- enter these manually and account for "
-        "your broker's execution timing (e.g. Fidelity may not execute "
-        "until end of the current or next trading day)."
+        "never places an order -- enter these manually with whatever order "
+        "type you prefer (market, limit, etc.)."
     )

@@ -60,7 +60,18 @@ CATALYST_LOOKBACK_DAYS = 180
 
 @dataclass(frozen=True)
 class RiskProfile:
-    """A point on the risk slider. See joebot/risk/profile.py for slider mapping."""
+    """A point on the risk slider. See joebot/risk/profile.py for slider mapping.
+
+    Per user feedback, the slider isn't just "safe numbers vs. risky
+    numbers" -- it also changes which *kind* of opportunity is even
+    eligible. binary_catalyst_tolerance (0.0-1.0) controls that: below the
+    0.5 threshold joebot/screener/composite.py excludes any candidate
+    whose single highest-scoring signal is an event-risk/binary-outcome
+    one (an activist stake, a leadership shakeup, a clinical trial readout
+    -- see joebot/signals/base.py::BINARY_CATALYST_SIGNALS) rather than a
+    steady trend. A conservative investor shouldn't be shown a turnaround
+    special situation at all; an aggressive one should.
+    """
 
     name: str
     min_market_cap: float
@@ -69,6 +80,7 @@ class RiskProfile:
     base_risk_fraction: float
     sizing_aggressiveness_multiplier: float
     max_position_fraction: float
+    binary_catalyst_tolerance: float
 
 
 # Named breakpoints the slider (0-100) interpolates between. Kept in config so
@@ -82,6 +94,7 @@ RISK_PROFILE_BREAKPOINTS: list[tuple[int, RiskProfile]] = [
         base_risk_fraction=0.005,
         sizing_aggressiveness_multiplier=0.5,
         max_position_fraction=0.15,
+        binary_catalyst_tolerance=0.0,  # no special situations / binary-catalyst-led picks at all
     )),
     (50, RiskProfile(
         name="moderate",
@@ -91,6 +104,7 @@ RISK_PROFILE_BREAKPOINTS: list[tuple[int, RiskProfile]] = [
         base_risk_fraction=0.01,
         sizing_aggressiveness_multiplier=1.0,
         max_position_fraction=0.25,
+        binary_catalyst_tolerance=1.0,  # growth + catalysts is squarely a moderate-risk opportunity type
     )),
     (100, RiskProfile(
         name="aggressive",
@@ -100,6 +114,7 @@ RISK_PROFILE_BREAKPOINTS: list[tuple[int, RiskProfile]] = [
         base_risk_fraction=0.02,
         sizing_aggressiveness_multiplier=1.75,
         max_position_fraction=0.35,
+        binary_catalyst_tolerance=1.0,
     )),
 ]
 

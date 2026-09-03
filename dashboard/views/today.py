@@ -26,8 +26,10 @@ def render(risk_slider_value: float) -> None:
     filtered = []
     for c in candidates:
         tech = c.signals.get("technical_breakout", {}).get("metadata", {})
+        signal_scores = {name: s["score"] for name, s in c.signals.items()}
         if passes_risk_filter(
-            tech.get("atr_pct_of_price"), tech.get("avg_dollar_volume"), tech.get("market_cap"), risk_profile
+            tech.get("atr_pct_of_price"), tech.get("avg_dollar_volume"), tech.get("market_cap"),
+            risk_profile, signal_scores,
         ):
             filtered.append(c)
 

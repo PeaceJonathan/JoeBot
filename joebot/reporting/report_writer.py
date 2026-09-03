@@ -11,7 +11,7 @@ from pathlib import Path
 from config import settings
 from config.settings import RiskProfile
 from joebot.reporting.narrative import build_narrative
-from joebot.risk.position_sizing import PositionSuggestion
+from joebot.risk.position_sizing import BudgetAllocation
 from joebot.screener.composite import RankedCandidate
 
 DISCLAIMER = (
@@ -30,7 +30,7 @@ def write_report(
     narrative_top_n: int = 10,
     risk_profile: RiskProfile | None = None,
     budget: float | None = None,
-    position_suggestions: list[PositionSuggestion] | None = None,
+    allocation: BudgetAllocation | None = None,
 ) -> Path:
     settings.ensure_dirs()
     path = settings.REPORTS_DIR / f"{as_of_date.isoformat()}.md"
@@ -82,18 +82,27 @@ def write_report(
             "or use the dashboard for an interactive slider (see README).",
             "",
         ]
-        if not position_suggestions:
-            lines.append("_No candidates passed the risk filter and had enough data to size a position._")
+        suggestions = allocation.suggestions if allocation else []
+        if not suggestions:
+            lines.append(
+                "_No candidate cleared the conviction floor with enough data to size a position -- "
+                "the full budget stays in cash. That's a legitimate outcome, not an error._"
+            )
         else:
             lines += [
                 "| Ticker | Shares | $ Amount | Entry | Stop |",
                 "|---|---|---|---|---|",
             ]
-            for s in position_suggestions:
+            for s in suggestions:
                 lines.append(
                     f"| {s.ticker} | {s.shares} | ${s.dollar_amount:,.2f} | "
                     f"${s.entry_price:.2f} | ${s.stop_price:.2f} |"
                 )
+            if allocation is not None:
+                lines += [
+                    "",
+                    f"**Allocated: ${allocation.allocated:,.2f} -- Reserved (cash): ${allocation.reserved_cash:,.2f}**",
+                ]
 
     path.write_text("\n".join(lines) + "\n")
     return path
