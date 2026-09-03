@@ -36,7 +36,7 @@ BULLET_SCORE_THRESHOLD = 0.15
 UNCHECKED_BEAR_CASE_FACTORS = (
     "share dilution / share count trend",
     "customer concentration",
-    "insider selling (only insider *buying*-adjacent activity via 13D/13G is tracked)",
+    "insider selling (only insider *buying* is tracked -- see insider_buying signal)",
     "short interest",
     "competitive positioning",
     "regulatory risk beyond what an 8-K/13D happens to disclose",
@@ -95,6 +95,20 @@ def _activist_stake_bullet(result: SignalResult) -> str | None:
     return f"Ownership: a new {form} was filed{filer_part} {when} -- someone is taking a meaningful stake."
 
 
+def _insider_buying_bullet(result: SignalResult) -> str | None:
+    m = result.metadata
+    purchases = m.get("purchases") or []
+    if not purchases:
+        return None
+    distinct = m.get("distinct_insiders", 0)
+    total_value = m.get("total_value")
+    days_ago = m.get("days_since_purchase")
+    when = f"{days_ago} days ago" if days_ago is not None else "recently"
+    who = f"{distinct} distinct insider(s)" if distinct and distinct > 1 else "an insider"
+    value_part = f" totaling ~${total_value:,.0f}" if isinstance(total_value, (int, float)) else ""
+    return f"Insider buying: {who} made an open-market purchase{value_part}, most recently {when}."
+
+
 def _leadership_change_bullet(result: SignalResult) -> str | None:
     m = result.metadata
     if not m.get("filings"):
@@ -150,6 +164,7 @@ _BULLET_FORMATTERS: dict[str, Callable[[SignalResult], str | None]] = {
     "technical_breakout": _technical_bullet,
     "fundamental_sanity": _fundamental_bullet,
     "activist_stake": _activist_stake_bullet,
+    "insider_buying": _insider_buying_bullet,
     "leadership_change": _leadership_change_bullet,
     "sentiment_reddit": _sentiment_bullet,
     "clinical_trial": _clinical_trial_bullet,
@@ -259,6 +274,14 @@ def _event_timeline(candidate: RankedCandidate) -> list[str]:
                 _add(f.get("filing_date"), f"{f.get('form', 'Ownership filing')} filed by {filer}")
             else:
                 _add(f.get("filing_date"), "8-K disclosing an officer/director change")
+
+    insider = candidate.signal_results.get("insider_buying")
+    if insider:
+        for p in insider.metadata.get("purchases", []):
+            who = p.get("insider") or "an insider"
+            value = p.get("value")
+            value_part = f" (~${value:,.0f})" if isinstance(value, (int, float)) else ""
+            _add(p.get("start_date"), f"Open-market insider purchase by {who}{value_part}")
 
     gov = candidate.signal_results.get("gov_contract")
     if gov:

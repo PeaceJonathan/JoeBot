@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 
 _price_cache = DiskCache(namespace="prices", ttl_seconds=6 * 3600)
 _info_cache = DiskCache(namespace="info", ttl_seconds=24 * 3600)
+_insider_cache = DiskCache(namespace="insider_transactions", ttl_seconds=24 * 3600)
 
 
 class MarketDataError(Exception):
@@ -181,3 +182,53 @@ def fetch_company_name(ticker: str) -> str | None:
     names) -- returns None if unavailable rather than guessing from the
     ticker symbol."""
     return _fetch_info(ticker).get("company_name")
+
+
+def fetch_insider_transactions(ticker: str) -> list[dict]:
+    """Recent Form-4-derived insider transactions (Yahoo's aggregated feed,
+    not a raw SEC parse) for the insider_buying signal.
+
+    Column names below (Start Date, Insider, Position, Text, Shares, Value,
+    Ownership) match yfinance's Holders._parse_insider_transactions exactly
+    -- confirmed by reading yfinance/scrapers/holders.py directly (this
+    package is installed locally even though this environment can't reach
+    Yahoo's servers to actually call it; see market_data.py's module note
+    and scripts/validate_live_data.py), not guessed. "Text" is Yahoo's free
+    -text transaction description (e.g. "Purchase at price X", "Sale at
+    price X", "Option Exercise") -- there's no separate structured
+    transaction-code field, so the insider_buying signal matches on that
+    text rather than the SEC Form 4 transaction code (P/S/A/M/etc.)
+    directly, which this feed doesn't expose.
+
+    Returns [] if yfinance has nothing for this ticker or the call fails --
+    never raises. Each dict: {"start_date" (ISO), "insider", "position",
+    "text", "shares", "value", "ownership"}.
+    """
+    cached = _insider_cache.get(ticker)
+    if cached is not None:
+        return cached
+
+    result: list[dict] = []
+    try:
+        market_data_rate_limiter.wait()
+        df = yf.Ticker(ticker).get_insider_transactions()
+        health.record_success(health.MARKET_DATA)
+        if df is not None and not df.empty:
+            for _, row in df.iterrows():
+                start_date = row.get("Start Date")
+                result.append({
+                    "start_date": start_date.date().isoformat() if pd.notna(start_date) else None,
+                    "insider": row.get("Insider"),
+                    "position": row.get("Position"),
+                    "text": row.get("Text"),
+                    "shares": row.get("Shares"),
+                    "value": row.get("Value"),
+                    "ownership": row.get("Ownership"),
+                })
+    except Exception as exc:
+        log.warning("Failed to fetch insider transactions for %s: %s", ticker, exc)
+        health.record_failure(health.MARKET_DATA, detail=str(exc))
+        return []
+
+    _insider_cache.set(ticker, result)
+    return result

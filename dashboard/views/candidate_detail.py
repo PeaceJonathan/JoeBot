@@ -14,6 +14,7 @@ _SIGNAL_LABELS = {
     "technical_breakout": "Technical",
     "fundamental_sanity": "Fundamentals",
     "activist_stake": "Ownership/Activist",
+    "insider_buying": "Insider Buying",
     "leadership_change": "Leadership",
     "sentiment_reddit": "Sentiment",
     "clinical_trial": "Clinical",

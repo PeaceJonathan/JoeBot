@@ -11,6 +11,7 @@ from joebot.signals.catalyst_clinical import ClinicalTrialSignal
 from joebot.signals.catalyst_sec import ActivistStakeSignal, LeadershipChangeSignal
 from joebot.signals.fundamental import FundamentalSanitySignal
 from joebot.signals.gov_contract import GovContractSignal
+from joebot.signals.insider_buying import InsiderBuyingSignal
 from joebot.signals.patent_activity import PatentActivitySignal
 from joebot.signals.sentiment_reddit import SentimentRedditSignal
 from joebot.signals.technical import TechnicalBreakoutSignal
@@ -29,6 +30,7 @@ DEFAULT_SIGNALS: list[Signal] = [
     TechnicalBreakoutSignal(),
     FundamentalSanitySignal(),
     ActivistStakeSignal(),
+    InsiderBuyingSignal(),
     LeadershipChangeSignal(),
     SentimentRedditSignal(),
     ClinicalTrialSignal(),

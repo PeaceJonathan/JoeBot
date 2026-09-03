@@ -87,6 +87,13 @@ def main() -> None:
             [gov_contracts_client.ContractAward(award_id="AW1", recipient_name=name, amount=45_000_000, award_date=AS_OF - dt.timedelta(days=15), awarding_agency="Department of Defense", description="C-UAS systems")]
             if "KTOS" in name or "Kratos" in name else []
         )),
+        mock.patch.object(market_data, "fetch_insider_transactions", side_effect=lambda t: (
+            [
+                {"start_date": (AS_OF - dt.timedelta(days=8)).isoformat(), "insider": "Jane Doe", "position": "Chief Executive Officer", "text": "Purchase at price 12.50", "shares": 10000, "value": 125_000, "ownership": "D"},
+                {"start_date": (AS_OF - dt.timedelta(days=40)).isoformat(), "insider": "John Roe", "position": "Director", "text": "Purchase at price 11.00", "shares": 5000, "value": 55_000, "ownership": "D"},
+            ]
+            if t == "SNAP" else []
+        )),
         # Patents and Reddit deliberately left as "not configured" (no key/creds patched in) --
         # this exercises the NOT_CONFIGURED path through Data Health end-to-end.
     ]

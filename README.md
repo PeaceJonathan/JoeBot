@@ -23,7 +23,7 @@ is the layer above a screener: given a candidate, why does it matter
 
 **Screens** the `status: active` sectors in `config/sectors.yaml` (tech,
 defense, "faded giant" comebacks, pharma — plus four unvalidated candidate
-sectors, see "Sector discovery" below) using eight signals, each
+sectors, see "Sector discovery" below) using nine signals, each
 independently scored and fully visible in the output — never just a
 black-box composite number:
 
@@ -32,6 +32,7 @@ black-box composite number:
 | `technical_breakout` | Proximity to the 52-week high, volume surge, ATR, RSI, 50/200-day moving-average crossover |
 | `fundamental_sanity` | Revenue growth trend and cash position, from SEC XBRL filings |
 | `activist_stake` | A new/recent Schedule 13D or 13G filing that isn't a routine passive-index filing — the mechanism behind a GoPro-style "someone notable took a stake, stock rallies" move |
+| `insider_buying` | An officer/director/insider open-market Form 4 purchase (via Yahoo's aggregated insider-transactions feed) — distinct from `activist_stake`'s 5%+ ownership threshold; a smaller, more common signal |
 | `leadership_change` | A recent 8-K Item 5.02 (officer/director departure or appointment) — a classic catalyst for a company that's fallen off |
 | `sentiment_reddit` | Mention-volume and mention-velocity across a handful of investing subreddits — one input among many, never a standalone buy signal |
 | `clinical_trial` | A recently-updated late-phase (III/IV) trial for a pharma ticker — a proxy for "approaching a readout," not a prediction of the trial's outcome |
@@ -45,12 +46,17 @@ renders each top candidate as a card:
 ```
 ### XYZ (defense) -- score 0.78
 **Verdict:** High conviction -- investigate further.
-**Why it appeared:**
+**Why now:**
 - Technical: trading within 5.0% of its 52-week high; volume running 2.1x its 20-day average.
 - Government: a new contract award from Department of Defense worth $140,000,000 was recorded.
-**What could go wrong:**
+**Bear case -- what could go wrong:**
 - High volatility -- ATR is 9.0% of price.
 - Thin liquidity -- average dollar volume is only $800,000/day.
+- Not checked at all (no data source in this project): share dilution, customer concentration, short interest, ...
+**Data gaps** (only shown if a source was unavailable/unconfigured for this candidate):
+- patent_activity: Patent Data (PatentsView) isn't configured (optional) -- this signal wasn't evaluated at all.
+**Event timeline:**
+- 2026-04-15 -- Government contract award ($140,000,000, Department of Defense)
 ```
 
 These combine into a **weighted composite score**
@@ -88,6 +94,16 @@ Every run — the scheduled one and the interactive one — shares the same
 
 ## Setup
 
+**One command** (recommended -- creates the venv, installs everything, and
+copies `.env.example` to `.env` for you):
+
+```bash
+./setup.sh      # macOS/Linux
+setup.bat       # Windows
+```
+
+Or manually:
+
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
@@ -106,6 +122,22 @@ Edit `.env`:
 - `PATENTSVIEW_API_KEY` — optional; same graceful-no-op pattern. Free but
   requires registration at <https://patentsview.org/apis/keyrequest> (the
   old keyless PatentsView endpoint was retired in 2026).
+
+`insider_buying` needs no key -- it reuses the same `yfinance` price-data
+access as `technical_breakout`.
+
+**Then, before trusting any output, run the live data validator** on a
+machine with normal internet access (this repo was developed and hardened
+in network-sandboxed environments that cannot reach any of these APIs --
+see "Known limitations" below):
+
+```bash
+python scripts/validate_live_data.py
+```
+
+It hits every configured source with a well-known ticker/company and
+reports PASS/FAIL/SKIPPED per source, plus a non-zero exit code if a
+required source fails -- see the script's own docstring for why it exists.
 
 ## Running it
 
@@ -127,16 +159,25 @@ everything in `data/joebot.db`.
 **Interactive dashboard** (same pipeline, same database, live risk slider):
 
 ```bash
-streamlit run dashboard/app.py
+streamlit run dashboard/app.py    # or: ./run.sh / run.bat
 ```
 
-Three views: **Today's Picks** (the latest scan, filtered live by the
-sidebar risk slider against already-persisted data — no re-fetch on every
-slider move — with a per-ticker narrative panel), **Budget Calculator**
-(enter a dollar amount and a conviction floor, get sized positions plus
-the cash reserve), and **Backtest Results** (browse past
-`scripts/run_backtest.py` runs). A "Re-run scan now" button in the sidebar
-calls the identical `pipeline.run_daily_scan()` the cron job uses.
+Eight pages, each a thin view over `joebot/` -- no scan logic lives in the
+dashboard itself:
+
+| Page | What it shows |
+|---|---|
+| **Dashboard** | The latest scan, filtered live by the sidebar risk slider against already-persisted data (no re-fetch on every slider move), with a per-ticker narrative panel. |
+| **Discover** | Search/filter every scanned candidate (sector, min score, ticker text) -- not risk-slider-gated, so it includes what a conservative profile would hide outright. |
+| **Candidate Detail** | The full non-black-box breakdown for one ticker: per-signal score breakdown, why now, bear case, data gaps, event timeline, raw metadata. |
+| **Catalysts** | A cross-candidate feed of recent dated events (filings, contracts, trial updates, insider buys, patents), most recent first -- not a forward-looking calendar (JoeBot has no data source for genuinely upcoming events and won't fabricate one). |
+| **Research** | Browse past `scripts/run_backtest.py` runs -- per-signal evaluation-fold spread and `n_observations`. |
+| **Portfolio** | Enter a dollar amount and a conviction floor, get sized positions plus the cash reserve. |
+| **Data Health** | Connectivity status for every external source as of the latest scan -- see "Data honesty" below. |
+| **Settings** | Read-only view of signal weights, risk-profile breakpoints, sector universe status, and which optional sources have credentials configured. |
+
+A "Re-run scan now" button in the sidebar calls the identical
+`pipeline.run_daily_scan()` the cron job uses.
 
 **Backtesting:**
 
@@ -169,12 +210,29 @@ produce one that looks great by chance alone.
 pytest
 ```
 
-91 unit tests, all deterministic and network-free (hand-computed values,
+132 unit tests, all deterministic and network-free (hand-computed values,
 fixture data via monkeypatch) — technical indicators, every signal's
-scoring math, narrative bullet formatters, point-in-time forward-return
-edge cases (data gaps, bankruptcies), signal attribution, risk-profile
-interpolation (including the opportunity-type gate), and budget allocation
-(including the conviction floor/cash-reserve behavior).
+scoring math (including `insider_buying`), narrative bullet formatters,
+point-in-time forward-return edge cases (data gaps, bankruptcies), signal
+attribution, risk-profile interpolation (including the opportunity-type
+gate), budget allocation (including the conviction floor/cash-reserve
+behavior), data-source health tracking, and the walk-forward engine's
+resilience to a ticker with no price data anywhere (see "Known
+limitations").
+
+**Full-pipeline smoke tests** (no network, run these after any change to
+signal/screener/reporting/storage code):
+
+```bash
+python scripts/smoke_test_synthetic.py     # scan -> persist -> narrative -> Data Health -> budget allocation
+python scripts/smoke_test_dashboard.py     # every dashboard page, via Streamlit's AppTest harness
+python scripts/backtest_synthetic_check.py # confirms the backtest engine recovers an engineered signal-return relationship
+```
+
+These prove the *plumbing* is sound end-to-end on fixture data; they say
+nothing about whether real API responses match what the code expects (see
+`scripts/validate_live_data.py`, "Setup" above) or whether any real signal
+has predictive value (see "Known limitations").
 
 ## Sector discovery
 
@@ -192,20 +250,78 @@ the pipeline is hard-coded to today's five sector names.
 
 | Purpose | Source | Notes |
 |---|---|---|
-| Price/volume | `yfinance` (primary), Finnhub (fallback, optional key) | `yfinance` is unofficial and can be blocked/changed by Yahoo without notice; failures degrade gracefully per-ticker. |
+| Price/volume, insider transactions | `yfinance` (primary), Finnhub (price fallback, optional key) | `yfinance` is unofficial and can be blocked/changed by Yahoo without notice; failures degrade gracefully per-ticker. Powers `technical_breakout` and `insider_buying` both. |
 | Fundamentals/filings | SEC EDGAR via `edgartools` | Free, official, no key. Requires a real `SEC_USER_AGENT`, stays under 10 req/sec. |
 | Sentiment | Reddit API via `praw` | Free at ~100 req/min for non-commercial personal use. StockTwits' API is frozen to new developers, so it's not used. |
 | Clinical trials | ClinicalTrials.gov API | Free, public, no key. |
 | Government contracts | USAspending.gov API | Free, public, no key. |
 | Patents | USPTO PatentsView PatentSearch API | Free but requires a registered key (see Setup) — the old keyless endpoint was retired in 2026. |
 
+Every source above reports its live connectivity to `joebot/data/health.py`
+on every call, persisted per scan run and shown on the dashboard's **Data
+Health** page — see "Data honesty" below for why this exists and what it
+does and doesn't tell you.
+
 General-purpose screeners (Finviz, TradingView, StockAnalysis, MarketBeat)
 and investor-tracking tools (Dataroma) are good free tools JoeBot
 deliberately doesn't try to replace — use them alongside this, not instead
 of it, if you want that kind of broad screening.
 
+## Data honesty: "no evidence found" vs. "data source unavailable"
+
+Every external client (`joebot/data/*_client.py`, `market_data.py`)
+records its live-call outcome to `joebot/data/health.py` -- OK, UNAVAILABLE
+(the call failed), or NOT_CONFIGURED (an optional source with no
+credentials). Every signal's `metadata["data_source_status"]` carries this
+(via `joebot/signals/base.py::with_source_status`), so a 0.0 score is never
+silently ambiguous between "checked, nothing there" and "couldn't check."
+The narrative layer (`joebot/reporting/narrative.py`) surfaces this per
+candidate as a **Data gaps** section, and the dashboard's **Data Health**
+page shows it for the whole last scan. Every candidate's bear case also
+explicitly lists the factors this project has *no* data source for at all
+(dilution, customer concentration, short interest, competitive
+positioning) rather than silently omitting them, which would read as
+"checked, no issue."
+
 ## Known limitations (stated plainly, not hidden)
 
+- **This environment could not reach any external data host at all.**
+  Both the sandboxed environment the original signal/backtest code was
+  written in, and separately the Claude Code Remote session that did this
+  round of hardening, have network-egress policies that block every host
+  this project needs (SEC EDGAR, Yahoo Finance, Reddit, ClinicalTrials.gov,
+  USAspending.gov, PatentsView, Finnhub -- confirmed directly, including
+  through the coding agent's own server-side web-fetch tool, not just
+  inferred). **No code in this repository has been exercised against a
+  real live HTTP response, ever, at any point in its development.** What
+  *has* been done instead: every installed client library
+  (`edgartools`, `yfinance`, `praw`) was read at the source level to verify
+  attribute/method names and DataFrame schemas match what the code
+  assumes -- this caught two real, confirmed bugs (below) -- and the full
+  scan → persist → narrative → Data Health → budget-allocation pipeline,
+  the backtest engine, and every dashboard page were verified end-to-end
+  against fixture data (`scripts/smoke_test_synthetic.py`,
+  `scripts/backtest_synthetic_check.py`, `scripts/smoke_test_dashboard.py`).
+  **Run `python scripts/validate_live_data.py` on a machine with normal
+  internet access before trusting any of this project's output.** That is
+  not optional caution -- it is the one verification step that has
+  genuinely never been performed.
+- **Two real bugs found and fixed this way** (both in `joebot/data/sec_client.py`,
+  found by reading `edgartools==5.56.0`'s actual source, not guessed): (1)
+  `EntityFacts` exposes `to_dataframe()`, not `to_pandas()` -- the prior
+  code called a method that doesn't exist, silently caught, so
+  `fundamental_sanity` reported "no usable XBRL data" for every ticker
+  regardless of what SEC actually had on file; (2) a SC 13D/13G's filer
+  identity lives at `Filing.header.reporting_owners`, not `Filing.company`
+  (the subject company) -- the prior fallback chain would have
+  misattributed every activist stake to "the company disclosed a stake in
+  itself." A third bug was found by actually *running*
+  `scripts/run_backtest.py` in this network-blocked environment: an
+  uncaught `MarketDataError` from a single ticker with no price data
+  anywhere crashed the entire walk-forward run rather than being treated
+  as one unknown observation -- fixed in `joebot/backtest/engine.py`.
+  None of this proves the rest of the code is correct; it proves these
+  three specific things were, and no longer are, wrong.
 - **No true point-in-time fundamentals or delisted-ticker universe.**
   `data/delisted_universe.csv` is a small, manually curated, explicitly
   incomplete seed list — not a comprehensive survivorship-bias fix (that
@@ -215,27 +331,40 @@ of it, if you want that kind of broad screening.
   actual filing/acceptance date, so its backtest attribution carries a
   residual look-ahead risk the other signal families don't have (see
   `joebot/backtest/point_in_time.py`).
-- **Several data clients' exact field names are unverified against live
-  data.** This project was built in a sandboxed environment whose network
-  policy blocks outbound SEC EDGAR, Yahoo Finance, Reddit,
-  ClinicalTrials.gov, USAspending.gov, and PatentsView access. Every
-  data-fetching module fails soft and is unit-tested on fixture data, and
-  the entire pipeline was verified end-to-end with fully-stubbed network
-  calls (including a synthetic-data check that the backtester correctly
-  recovers a known signal-to-return relationship, and a live risk-slider
-  sweep confirming the opportunity-type gate works) — but the *real*
-  field names/response shapes for several of these APIs need a live smoke
-  test on a machine with normal internet access before you trust their
-  output. Start there.
+- **No real multi-year backtest has been run.** `scripts/run_backtest.py`
+  and `joebot/backtest/` are architecturally verified (walk-forward date
+  generation, point-in-time forward-return computation, calibration/
+  evaluation fold split, and median-split signal attribution all
+  demonstrably recover an engineered signal-to-return relationship on
+  synthetic data -- `scripts/backtest_synthetic_check.py`), but this
+  environment cannot fetch real historical prices, so **which signals
+  actually have predictive value on real markets is still an entirely open
+  question.** `DEFAULT_SIGNAL_WEIGHTS` remains an unvalidated starting
+  guess. Run `python scripts/run_backtest.py --years 3` yourself once live
+  data access is confirmed, and only change the weights from that
+  evaluation-fold result.
+- **No signal-combination testing exists yet** (section 6's "revenue
+  acceleration + insider buying," "activist stake + depressed valuation,"
+  etc.) -- `joebot/backtest/signal_evaluation.py` only evaluates one signal
+  family at a time. Building this without the multiple-testing correction
+  the project's own rules require (see "Backtesting" above) would be worse
+  than not building it; this is the next highest-value piece of the
+  research system, not a small add-on.
 - **Sample sizes will be small.** Catalyst-signal events (activist stakes,
-  leadership changes, contract awards) are rare in a small tracked
-  universe — don't overfit the composite screener to one anecdote (the
-  GoPro example that inspired this project is one data point, not a
-  validated pattern, until backtested).
+  insider purchases, leadership changes, contract awards) are rare in a
+  small tracked universe — don't overfit the composite screener to one
+  anecdote (the GoPro example that inspired this project is one data
+  point, not a validated pattern, until backtested).
 - **`patent_activity` measures filing momentum only, not IP quality**
   (citations, claim breadth, competitive relevance) — that's a hard
   problem this doesn't attempt, and it's why the signal's confidence is
   capped and its default weight is the smallest of any signal.
+- **`insider_buying` reads Yahoo's free-text transaction description**
+  (e.g. "Purchase at price X"), not the SEC's structured Form 4
+  transaction code, since that structured field isn't in this feed --
+  matched by keyword, which is more failure-prone than a code match. Insider
+  *selling* is deliberately not scored as a negative (see the signal's
+  module docstring) and isn't tracked as a bear-case factor either.
 - **This is decision support only**, at every phase — it never places,
   sizes-for-auto-execution, or connects to any brokerage order API.
 
@@ -252,16 +381,24 @@ fold) — never hand-tuned on the full history, to avoid data-snooping bias.
 config/          settings, sectors.yaml, pharma sponsor crosswalk
 joebot/
   data/          external data clients (market data, SEC, Reddit, clinical trials,
-                 gov contracts, patents) + shared cache/rate-limiter
+                 gov contracts, patents) + health.py (connectivity tracking) +
+                 shared cache/rate-limiter
   signals/       one module per signal family, all behind a common Signal interface
   screener/      combines signals into a ranked, risk-filtered candidate list
   risk/          risk-slider profile + ATR-based budget allocator (with cash reserve)
   backtest/      walk-forward engine, point-in-time guardrails, signal attribution, metrics
   storage/       SQLite models + read queries
-  reporting/     narrative "why it appeared" cards + daily markdown report writer
+  reporting/     narrative "why it appeared"/bear-case/event-timeline cards +
+                 daily markdown report writer
   pipeline.py    shared orchestration seam for the CLI and the dashboard
-scripts/         run_daily.py (cron), run_backtest.py (CLI)
-dashboard/       Streamlit app (today / budget / backtest views)
-tests/unit/      91 deterministic, network-free tests
+scripts/         run_daily.py (cron), run_backtest.py (CLI),
+                 validate_live_data.py (live smoke test -- run this yourself),
+                 smoke_test_synthetic.py / smoke_test_dashboard.py /
+                 backtest_synthetic_check.py (fixture-driven regression checks)
+dashboard/       Streamlit app -- Dashboard / Discover / Candidate Detail /
+                 Catalysts / Research / Portfolio / Data Health / Settings
+tests/unit/      132 deterministic, network-free tests
 data/            delisted_universe.csv (tracked), joebot.db + reports + cache (gitignored)
+setup.sh / setup.bat   one-command install (venv + deps + .env)
+run.sh / run.bat       one-command dashboard launch
 ```
