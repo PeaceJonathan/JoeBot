@@ -1,6 +1,7 @@
 """Runs the composite screener across every configured sector."""
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import logging
 
@@ -39,21 +40,54 @@ DEFAULT_SIGNALS: list[Signal] = [
 ]
 
 
-def run_all_sectors(as_of_date: dt.date, signals: list[Signal] = DEFAULT_SIGNALS) -> list[RankedCandidate]:
+@dataclasses.dataclass
+class SkippedTicker:
+    ticker: str
+    sector: str
+    reason: str
+
+
+@dataclasses.dataclass
+class ScreenResult:
+    """candidates is what most callers want; attempted/skipped exist so a
+    scan that silently returns far fewer candidates than the configured
+    universe is explainable rather than mysterious (see
+    joebot/pipeline.py::_persist_scan, which persists these onto the
+    ScanRun row, and dashboard/views/today.py, which surfaces them).
+    A ticker being skipped here means EVERY signal failed for it outright
+    (an exception, not just a low/zero score) -- almost always a real
+    problem (bad/renamed symbol, or every data source unreachable for that
+    ticker this run), not a normal "nothing interesting found" outcome.
+    """
+
+    candidates: list[RankedCandidate]
+    attempted: int
+    skipped: list[SkippedTicker]
+
+
+def run_all_sectors(as_of_date: dt.date, signals: list[Signal] = DEFAULT_SIGNALS) -> ScreenResult:
     """Scans only status: active sectors -- candidate sectors (Phase 4 sector
     discovery) are backtest-only until manually promoted in sectors.yaml
     based on a real evaluation-fold result from scripts/run_backtest.py."""
     sectors = universe.active_sectors()
     all_candidates: list[RankedCandidate] = []
+    skipped: list[SkippedTicker] = []
+    attempted = 0
 
     for sector in sectors.values():
         for ticker in sector.tickers:
+            attempted += 1
             try:
                 candidate = score_ticker(ticker, sector.name, signals, as_of_date)
                 all_candidates.append(candidate)
             except Exception as exc:
                 # One bad ticker (delisted, renamed, API hiccup) must not
-                # take down the whole scan.
+                # take down the whole scan -- but it IS worth recording,
+                # not just logging, since a run that skips a large chunk of
+                # the universe (e.g. a Yahoo Finance rate-limit mid-scan)
+                # should be obviously abnormal to the user, not just a
+                # shorter-than-expected table with no explanation.
                 log.warning("Skipping %s (%s): %s", ticker, sector.name, exc)
+                skipped.append(SkippedTicker(ticker=ticker, sector=sector.name, reason=str(exc)))
 
-    return rank_candidates(all_candidates)
+    return ScreenResult(candidates=rank_candidates(all_candidates), attempted=attempted, skipped=skipped)

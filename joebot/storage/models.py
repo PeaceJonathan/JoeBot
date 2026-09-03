@@ -26,6 +26,16 @@ class ScanRun(Base):
     run_at: Mapped[dt.datetime] = mapped_column(DateTime, default=dt.datetime.utcnow)
     as_of_date: Mapped[dt.date] = mapped_column(String)  # stored as ISO date string
 
+    # How many tickers the configured universe actually contained
+    # (joebot/screener/sector_screens.py::ScreenResult.attempted) vs. how
+    # many produced zero candidates because every signal raised for them
+    # (e.g. a Yahoo Finance rate-limit mid-scan, a renamed/delisted
+    # symbol -- see ScreenResult's docstring). len(candidates) alone can't
+    # distinguish "the universe is just small" from "most of it silently
+    # failed," which is exactly the confusion this exists to prevent.
+    tickers_attempted: Mapped[int] = mapped_column(Integer, default=0)
+    tickers_skipped_json: Mapped[list] = mapped_column(JSON, default=list)  # [{"ticker","sector","reason"}, ...]
+
     candidates: Mapped[list["Candidate"]] = relationship(back_populates="scan_run")
 
 

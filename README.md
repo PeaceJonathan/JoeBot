@@ -46,6 +46,7 @@ renders each top candidate as a card:
 ```
 ### XYZ (defense) -- score 0.78
 **Verdict:** High conviction -- investigate further.
+**Horizon:** Long-term (~1-3+ years) -- driven by gov_contract
 **Why now:**
 - Technical: trading within 5.0% of its 52-week high; volume running 2.1x its 20-day average.
 - Government: a new contract award from Department of Defense worth $140,000,000 was recorded.
@@ -63,6 +64,16 @@ These combine into a **weighted composite score**
 (`config/settings.py::DEFAULT_SIGNAL_WEIGHTS`) with full per-signal
 provenance persisted alongside it — see "Why the signal weights are a
 placeholder" below before trusting the weighting.
+
+**Classifies horizon**, not just score. Not every opportunity is a
+short-term breakout -- a biotech trial might be a ~6-month catalyst, a
+defense-technology thesis might take years. `joebot/reporting/horizon.py`
+labels each candidate Short-term (~1-3 months), Medium-term (~3-12 months),
+or Long-term (~1-3+ years) based on its single highest-scoring signal (a
+price breakout is short-term; a patent/IP or government-contract thesis is
+long-term). This is a **stated judgment call, not a backtested or measured
+quantity** — this project has no data tracking realized time-to-payoff per
+signal. Filterable on the Dashboard and Discover pages.
 
 A **risk slider** (0 = conservative .. 100 = aggressive,
 `joebot/risk/profile.py`) does three things at once:
@@ -210,15 +221,16 @@ produce one that looks great by chance alone.
 pytest
 ```
 
-132 unit tests, all deterministic and network-free (hand-computed values,
+150 unit tests, all deterministic and network-free (hand-computed values,
 fixture data via monkeypatch) — technical indicators, every signal's
-scoring math (including `insider_buying`), narrative bullet formatters,
-point-in-time forward-return edge cases (data gaps, bankruptcies), signal
-attribution, risk-profile interpolation (including the opportunity-type
-gate), budget allocation (including the conviction floor/cash-reserve
-behavior), data-source health tracking, and the walk-forward engine's
-resilience to a ticker with no price data anywhere (see "Known
-limitations").
+scoring math (including `insider_buying`), horizon classification,
+narrative bullet formatters, point-in-time forward-return edge cases (data
+gaps, bankruptcies), signal attribution, risk-profile interpolation
+(including the opportunity-type gate), budget allocation (including the
+conviction floor/cash-reserve behavior), data-source health tracking, the
+`yfinance` rate-limit retry logic, the SQLite schema migration, and the
+walk-forward engine's resilience to a ticker with no price data anywhere
+(see "Known limitations").
 
 **Full-pipeline smoke tests** (no network, run these after any change to
 signal/screener/reporting/storage code):
@@ -322,6 +334,35 @@ positioning) rather than silently omitting them, which would read as
   as one unknown observation -- fixed in `joebot/backtest/engine.py`.
   None of this proves the rest of the code is correct; it proves these
   three specific things were, and no longer are, wrong.
+- **Two more real bugs found from an actual live run against real data**
+  (by the project's own user, on their own machine -- the first genuine
+  live exercise of this codebase): (1) scanning a full sector universe
+  (dozens of tickers x several `yfinance` calls each) triggered Yahoo
+  Finance's own rate limiting (`YFRateLimitError` / HTTP 429) partway
+  through, and every ticker after that point silently failed and vanished
+  from the results with no visible explanation -- a 39-ticker universe
+  scan came back with 2 candidates. Fixed with retry-with-backoff on a
+  confirmed rate-limit error (`joebot/data/market_data.py`), a gentler
+  default request pace, and -- more importantly -- the scan now records
+  *why* each skipped ticker was skipped and surfaces it prominently on the
+  Dashboard page rather than just quietly returning a shorter table (see
+  `joebot/screener/sector_screens.py::ScreenResult`,
+  `ScanRun.tickers_skipped_json`). (2) `config/sectors.yaml` and
+  `config/pharma_crosswalk.yaml` had `SAVA` (Cassava Sciences) -- the
+  company renamed to Filana Therapeutics and changed its ticker to `FLNA`
+  on 2026-03-11, confirmed via web search, months before this was caught.
+  This is exactly the "static ticker universe needs manual upkeep" limitation
+  already documented in `config/sectors.yaml`'s own header comment, now with
+  a concrete example: a candidate the app was still confidently showing was
+  for a ticker that hadn't existed for months. Fixed, and
+  `catalyst_clinical.py`'s sponsor crosswalk now supports multiple
+  name aliases per ticker (old + new legal name), since a renamed company's
+  older trials may still be registered under the old name on
+  ClinicalTrials.gov. **If a ticker in this repo's config looks wrong,
+  it's stale config, not a live-data freshness problem** -- price/filing
+  data itself is fetched fresh on every scan (subject to each source's own
+  cache TTL, a few hours at most); the *list of which tickers to look at*
+  is a hand-maintained file that nothing in this project auto-updates.
 - **No true point-in-time fundamentals or delisted-ticker universe.**
   `data/delisted_universe.csv` is a small, manually curated, explicitly
   incomplete seed list — not a comprehensive survivorship-bias fix (that
@@ -389,6 +430,7 @@ joebot/
   backtest/      walk-forward engine, point-in-time guardrails, signal attribution, metrics
   storage/       SQLite models + read queries
   reporting/     narrative "why it appeared"/bear-case/event-timeline cards +
+                 horizon.py (short/medium/long-term classification) +
                  daily markdown report writer
   pipeline.py    shared orchestration seam for the CLI and the dashboard
 scripts/         run_daily.py (cron), run_backtest.py (CLI),
@@ -397,7 +439,7 @@ scripts/         run_daily.py (cron), run_backtest.py (CLI),
                  backtest_synthetic_check.py (fixture-driven regression checks)
 dashboard/       Streamlit app -- Dashboard / Discover / Candidate Detail /
                  Catalysts / Research / Portfolio / Data Health / Settings
-tests/unit/      132 deterministic, network-free tests
+tests/unit/      150 deterministic, network-free tests
 data/            delisted_universe.csv (tracked), joebot.db + reports + cache (gitignored)
 setup.sh / setup.bat   one-command install (venv + deps + .env)
 run.sh / run.bat       one-command dashboard launch

@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import time
 
 import pandas as pd
 import requests
 import yfinance as yf
+from yfinance.exceptions import YFRateLimitError
 
 from config import settings
 from joebot.data import health
@@ -24,6 +26,35 @@ log = logging.getLogger(__name__)
 _price_cache = DiskCache(namespace="prices", ttl_seconds=6 * 3600)
 _info_cache = DiskCache(namespace="info", ttl_seconds=24 * 3600)
 _insider_cache = DiskCache(namespace="insider_transactions", ttl_seconds=24 * 3600)
+
+# Scanning a full sector universe means dozens of tickers x several
+# yfinance calls each (history, info, insider transactions) in one run.
+# yfinance's own client raises YFRateLimitError on an HTTP 429 from Yahoo
+# (confirmed by reading yfinance/data.py directly) well before this
+# process's own market_data_rate_limiter pacing necessarily helps -- Yahoo's
+# real limit is undocumented and can be tighter than our client-side cap.
+# Retried here with backoff since a 429 is transient (unlike "bad ticker"),
+# and until this existed, a rate-limit mid-scan silently ate wide swaths of
+# the universe: every ticker after the limit kicked in just failed and got
+# dropped by joebot/screener/sector_screens.py's per-ticker exception
+# handling, with no visible explanation of why so few candidates came back.
+_RATE_LIMIT_RETRY_DELAYS = (5, 15, 30)  # seconds; 3 attempts total
+
+
+def _call_with_rate_limit_retry(fn):
+    """Runs fn() (a zero-arg thunk), retrying on YFRateLimitError with
+    increasing backoff. Re-raises the last error if every attempt fails."""
+    last_exc: Exception | None = None
+    for attempt, delay in enumerate((0, *_RATE_LIMIT_RETRY_DELAYS)):
+        if delay:
+            log.warning("Rate-limited by Yahoo Finance -- waiting %ds before retry %d/%d", delay, attempt, len(_RATE_LIMIT_RETRY_DELAYS))
+            time.sleep(delay)
+        try:
+            return fn()
+        except YFRateLimitError as exc:
+            last_exc = exc
+            continue
+    raise last_exc
 
 
 class MarketDataError(Exception):
@@ -82,7 +113,7 @@ def fetch_price_history_covering(
 def _fetch_from_yfinance(ticker: str, lookback_days: int) -> pd.DataFrame | None:
     try:
         market_data_rate_limiter.wait()
-        hist = yf.Ticker(ticker).history(period=f"{lookback_days}d", auto_adjust=True)
+        hist = _call_with_rate_limit_retry(lambda: yf.Ticker(ticker).history(period=f"{lookback_days}d", auto_adjust=True))
         if hist is None or hist.empty:
             # A clean empty response (not an exception) is a real "no data
             # for this ticker" -- e.g. a bad symbol -- not a source outage.
@@ -158,7 +189,7 @@ def _fetch_info(ticker: str) -> dict:
     company_name = None
     try:
         market_data_rate_limiter.wait()
-        info = yf.Ticker(ticker).get_info()
+        info = _call_with_rate_limit_retry(lambda: yf.Ticker(ticker).get_info())
         market_cap = info.get("marketCap")
         company_name = info.get("longName") or info.get("shortName")
         health.record_success(health.MARKET_DATA)
@@ -211,7 +242,7 @@ def fetch_insider_transactions(ticker: str) -> list[dict]:
     result: list[dict] = []
     try:
         market_data_rate_limiter.wait()
-        df = yf.Ticker(ticker).get_insider_transactions()
+        df = _call_with_rate_limit_retry(lambda: yf.Ticker(ticker).get_insider_transactions())
         health.record_success(health.MARKET_DATA)
         if df is not None and not df.empty:
             for _, row in df.iterrows():

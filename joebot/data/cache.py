@@ -76,4 +76,12 @@ class DiskCache:
 
 # Shared limiter instances. SEC's documented cap is 10 req/sec; we stay under it.
 sec_rate_limiter = RateLimiter(max_per_second=settings.SEC_MAX_REQUESTS_PER_SECOND)
-market_data_rate_limiter = RateLimiter(max_per_second=2.0)
+# Yahoo's real limit for yfinance's unofficial API is undocumented and, in
+# practice, tighter than this project's original 2/sec guess -- scanning a
+# full sector universe (dozens of tickers x several calls each: price
+# history, info, insider transactions) was observed hitting 429s partway
+# through a real run. 1/sec is more conservative; joebot/data/market_data.py
+# additionally retries with backoff on an actual 429 (YFRateLimitError) as
+# a second line of defense, since even a conservative client-side pace
+# doesn't guarantee Yahoo's server-side limit won't still trip.
+market_data_rate_limiter = RateLimiter(max_per_second=1.0)

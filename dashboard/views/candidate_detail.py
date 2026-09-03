@@ -39,6 +39,9 @@ def render() -> None:
 
     st.subheader(f"{card.ticker} ({card.sector}) -- {card.composite_score * 100:.0f}/100")
     st.markdown(f"**Verdict:** {card.verdict}")
+    if card.horizon:
+        driven_by = f" -- driven by `{card.horizon.driven_by}`" if card.horizon.driven_by else " (no signal scored above zero)"
+        st.markdown(f"**Horizon:** {card.horizon.display}{driven_by}")
 
     st.markdown("### Score breakdown")
     cols = st.columns(len(c.signals) or 1)

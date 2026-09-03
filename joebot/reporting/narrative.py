@@ -19,6 +19,7 @@ import datetime as dt
 from typing import Callable
 
 from joebot.data import health
+from joebot.reporting.horizon import HorizonClassification, classify_horizon
 from joebot.screener.composite import RankedCandidate
 from joebot.signals.base import BINARY_CATALYST_SIGNALS, SignalResult
 
@@ -53,6 +54,7 @@ class NarrativeCard:
     risk_bullets: list[str]
     data_gap_bullets: list[str] = dataclasses.field(default_factory=list)
     timeline: list[str] = dataclasses.field(default_factory=list)
+    horizon: HorizonClassification | None = None
 
 
 def _fmt_pct(x: float | None, decimals: int = 1) -> str:
@@ -355,4 +357,5 @@ def build_narrative(candidate: RankedCandidate) -> NarrativeCard:
         risk_bullets=_risk_bullets(candidate),
         data_gap_bullets=_data_gap_bullets(candidate),
         timeline=_event_timeline(candidate),
+        horizon=classify_horizon({name: r.score for name, r in candidate.signal_results.items()}),
     )

@@ -6,7 +6,10 @@ from __future__ import annotations
 
 import streamlit as st
 
+from joebot.reporting.horizon import LONG_TERM, MEDIUM_TERM, SHORT_TERM, classify_horizon
 from joebot.storage.queries import latest_candidates
+
+_HORIZON_LABELS = {SHORT_TERM: "Short-term", MEDIUM_TERM: "Medium-term", LONG_TERM: "Long-term"}
 
 
 def render() -> None:
@@ -24,20 +27,29 @@ def render() -> None:
 
     st.caption(f"Scan as of {run.as_of_date} (run at {run.run_at} UTC) -- {len(candidates)} tickers scanned.")
 
+    horizons = {c.ticker: classify_horizon({name: s["score"] for name, s in c.signals.items()}) for c in candidates}
+
     sectors = sorted({c.sector for c in candidates})
-    col1, col2, col3 = st.columns([2, 2, 2])
+    col1, col2, col3, col4 = st.columns([2, 2, 2, 2])
     with col1:
         selected_sectors = st.multiselect("Sector", sectors, default=sectors)
     with col2:
         min_score = st.slider("Minimum composite score", 0.0, 1.0, 0.0, 0.05)
     with col3:
         ticker_query = st.text_input("Ticker contains", "").strip().upper()
+    with col4:
+        selected_horizon_labels = st.multiselect(
+            "Horizon", list(_HORIZON_LABELS.values()), default=list(_HORIZON_LABELS.values()),
+            help="A per-signal-family judgment call, not measured/backtested -- see joebot/reporting/horizon.py.",
+        )
+    selected_horizon_keys = {k for k, label in _HORIZON_LABELS.items() if label in selected_horizon_labels}
 
     filtered = [
         c for c in candidates
         if c.sector in selected_sectors
         and c.composite_score >= min_score
         and (not ticker_query or ticker_query in c.ticker.upper())
+        and horizons[c.ticker].horizon in selected_horizon_keys
     ]
 
     st.caption(f"{len(filtered)}/{len(candidates)} candidates match.")
@@ -47,7 +59,7 @@ def render() -> None:
 
     rows = []
     for c in filtered:
-        row = {"Rank": c.rank, "Ticker": c.ticker, "Sector": c.sector, "Score": round(c.composite_score, 3)}
+        row = {"Rank": c.rank, "Ticker": c.ticker, "Sector": c.sector, "Score": round(c.composite_score, 3), "Horizon": horizons[c.ticker].display}
         for name, sig in c.signals.items():
             row[name] = round(sig["score"], 2)
         rows.append(row)

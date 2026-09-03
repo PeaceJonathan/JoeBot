@@ -7,6 +7,14 @@ genuinely high-variance binary event no free data source can forecast.
 Sponsor identification is via config/pharma_crosswalk.yaml; a ticker
 missing from that crosswalk scores 0 with zero confidence (unknown, not
 "no trial activity" -- don't read a missing crosswalk entry as bad news).
+
+Each ticker maps to one or more sponsor-name aliases (a plain string, or a
+YAML list of strings). Multiple aliases matter for a renamed company: when
+Cassava Sciences renamed to Filana Therapeutics (SAVA -> FLNA, 2026-03-11),
+trials registered before the rename may still carry the old sponsor name on
+ClinicalTrials.gov (registries don't necessarily backfill a corporate
+rename onto historical records) -- querying only the new name would silently
+miss them. All aliases are queried and merged (deduped by nct_id).
 """
 from __future__ import annotations
 
@@ -20,10 +28,12 @@ from joebot.signals.base import SignalResult, with_source_status
 
 DEFAULT_LOOKBACK_DAYS = 120
 
-_crosswalk_cache: dict[str, str] | None = None
+_crosswalk_cache: dict[str, list[str]] | None = None
 
 
-def _load_crosswalk() -> dict[str, str]:
+def _load_crosswalk() -> dict[str, list[str]]:
+    """ticker -> list of sponsor-name aliases (always a list, even for a
+    single-alias entry, so callers never special-case the YAML shape)."""
     global _crosswalk_cache
     if _crosswalk_cache is not None:
         return _crosswalk_cache
@@ -34,7 +44,12 @@ def _load_crosswalk() -> dict[str, str]:
         return _crosswalk_cache
 
     with path.open() as f:
-        _crosswalk_cache = yaml.safe_load(f) or {}
+        raw = yaml.safe_load(f) or {}
+
+    _crosswalk_cache = {
+        ticker: (aliases if isinstance(aliases, list) else [aliases])
+        for ticker, aliases in raw.items()
+    }
     return _crosswalk_cache
 
 
@@ -46,11 +61,18 @@ class ClinicalTrialSignal:
 
     @with_source_status(health.CLINICALTRIALS)
     def score(self, ticker: str, as_of_date: dt.date) -> SignalResult:
-        sponsor_name = _load_crosswalk().get(ticker)
-        if not sponsor_name:
+        sponsor_aliases = _load_crosswalk().get(ticker)
+        if not sponsor_aliases:
             return SignalResult(score=0.0, confidence=0.0, metadata={"error": "no sponsor crosswalk entry"})
+        if isinstance(sponsor_aliases, str):
+            sponsor_aliases = [sponsor_aliases]  # tolerate a caller/test bypassing _load_crosswalk's own normalization
 
-        trials = clinicaltrials_client.fetch_trials_for_sponsor(sponsor_name)
+        trials_by_nct: dict[str | None, clinicaltrials_client.TrialSnapshot] = {}
+        for alias in sponsor_aliases:
+            for t in clinicaltrials_client.fetch_trials_for_sponsor(alias):
+                trials_by_nct[t.nct_id] = t
+        trials = list(trials_by_nct.values())
+        sponsor_name = sponsor_aliases[0]  # primary/current name, for display
         cutoff = as_of_date - dt.timedelta(days=self.lookback_days)
 
         relevant = [
