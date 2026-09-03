@@ -64,12 +64,20 @@ def write_report(
                 f"### {card.ticker} ({card.sector}) -- score {card.composite_score:.2f}",
                 "",
                 f"**Verdict:** {card.verdict}",
+                f"**Horizon:** {card.horizon.display if card.horizon else 'n/a'}"
+                + (f" -- driven by {card.horizon.driven_by}" if card.horizon and card.horizon.driven_by else ""),
                 "",
-                "**Why it appeared:**",
+                "**Why now:**",
             ]
             lines += [f"- {b}" for b in card.why_bullets]
-            lines += ["", "**What could go wrong:**"]
+            lines += ["", "**Bear case -- what could go wrong:**"]
             lines += [f"- {b}" for b in card.risk_bullets]
+            if card.data_gap_bullets:
+                lines += ["", "**Data gaps (checked and reported, not hidden):**"]
+                lines += [f"- {b}" for b in card.data_gap_bullets]
+            if card.timeline:
+                lines += ["", "**Event timeline:**"]
+                lines += [f"- {t}" for t in card.timeline]
             lines.append("")
 
     if risk_profile is not None and budget is not None:

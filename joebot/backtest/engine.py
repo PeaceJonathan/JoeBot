@@ -61,6 +61,24 @@ class BacktestResult:
         return df[df["as_of_date"] >= self.calibration_cutoff]
 
 
+def _safe_forward_return(ticker: str, as_of_date: dt.date, horizon_days: int, delisting_info) -> float | None:
+    """point_in_time.forward_return() itself calls market_data functions
+    that can raise MarketDataError (no source had data at all -- a bad
+    symbol, a real network/API outage) without catching it. Uncaught, this
+    crashed the ENTIRE walk-forward run on the very first ticker with no
+    usable price history, defeating the per-ticker resilience the rest of
+    this loop (and joebot/screener/sector_screens.py's equivalent scan
+    loop) already has. One bad ticker's price data must degrade to "unknown
+    forward return" (dropped by signal_evaluation.py's dropna), not take
+    down a multi-hour backtest run.
+    """
+    try:
+        return point_in_time.forward_return(ticker, as_of_date, horizon_days, delisting_info)
+    except Exception as exc:
+        log.warning("forward_return failed for %s at %s (%dd horizon): %s", ticker, as_of_date, horizon_days, exc)
+        return None
+
+
 def _generate_as_of_dates(start_date: dt.date, end_date: dt.date, step_days: int) -> list[dt.date]:
     """Dates spaced step_days apart, leaving enough room before end_date for
     the long-horizon forward return to actually be computable."""
@@ -102,8 +120,8 @@ def run_walk_forward(
         for sector, tickers in universe_by_sector.items():
             for ticker in tickers:
                 delisting_info = delistings.get(ticker)
-                fwd_short = point_in_time.forward_return(ticker, as_of_date, SHORT_HORIZON_DAYS, delisting_info)
-                fwd_long = point_in_time.forward_return(ticker, as_of_date, LONG_HORIZON_DAYS, delisting_info)
+                fwd_short = _safe_forward_return(ticker, as_of_date, SHORT_HORIZON_DAYS, delisting_info)
+                fwd_long = _safe_forward_return(ticker, as_of_date, LONG_HORIZON_DAYS, delisting_info)
 
                 for sig in signals:
                     try:

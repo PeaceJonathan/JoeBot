@@ -22,6 +22,7 @@ import logging
 
 import requests
 
+from joebot.data import health
 from joebot.data.cache import DiskCache
 
 log = logging.getLogger(__name__)
@@ -74,8 +75,10 @@ def _fetch_trials_uncached(sponsor_name: str) -> list[dict]:
         )
         resp.raise_for_status()
         payload = resp.json()
+        health.record_success(health.CLINICALTRIALS)
     except Exception as exc:
         log.warning("ClinicalTrials.gov lookup failed for sponsor %r: %s", sponsor_name, exc)
+        health.record_failure(health.CLINICALTRIALS, detail=str(exc))
         return []
 
     results = []

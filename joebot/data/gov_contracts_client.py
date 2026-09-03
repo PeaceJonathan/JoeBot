@@ -22,6 +22,7 @@ from dataclasses import dataclass
 
 import requests
 
+from joebot.data import health
 from joebot.data.cache import DiskCache
 
 log = logging.getLogger(__name__)
@@ -87,8 +88,10 @@ def _fetch_contracts_uncached(company_name: str) -> list[dict]:
         resp = requests.post(API_URL, json=payload, timeout=15)
         resp.raise_for_status()
         data = resp.json()
+        health.record_success(health.USASPENDING)
     except Exception as exc:
         log.warning("USAspending.gov lookup failed for %r: %s", company_name, exc)
+        health.record_failure(health.USASPENDING, detail=str(exc))
         return []
 
     results = []

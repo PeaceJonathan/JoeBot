@@ -10,18 +10,51 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import time
 
 import pandas as pd
 import requests
 import yfinance as yf
+from yfinance.exceptions import YFRateLimitError
 
 from config import settings
+from joebot.data import health
 from joebot.data.cache import DiskCache, market_data_rate_limiter
 
 log = logging.getLogger(__name__)
 
 _price_cache = DiskCache(namespace="prices", ttl_seconds=6 * 3600)
 _info_cache = DiskCache(namespace="info", ttl_seconds=24 * 3600)
+_insider_cache = DiskCache(namespace="insider_transactions", ttl_seconds=24 * 3600)
+
+# Scanning a full sector universe means dozens of tickers x several
+# yfinance calls each (history, info, insider transactions) in one run.
+# yfinance's own client raises YFRateLimitError on an HTTP 429 from Yahoo
+# (confirmed by reading yfinance/data.py directly) well before this
+# process's own market_data_rate_limiter pacing necessarily helps -- Yahoo's
+# real limit is undocumented and can be tighter than our client-side cap.
+# Retried here with backoff since a 429 is transient (unlike "bad ticker"),
+# and until this existed, a rate-limit mid-scan silently ate wide swaths of
+# the universe: every ticker after the limit kicked in just failed and got
+# dropped by joebot/screener/sector_screens.py's per-ticker exception
+# handling, with no visible explanation of why so few candidates came back.
+_RATE_LIMIT_RETRY_DELAYS = (5, 15, 30)  # seconds; 3 attempts total
+
+
+def _call_with_rate_limit_retry(fn):
+    """Runs fn() (a zero-arg thunk), retrying on YFRateLimitError with
+    increasing backoff. Re-raises the last error if every attempt fails."""
+    last_exc: Exception | None = None
+    for attempt, delay in enumerate((0, *_RATE_LIMIT_RETRY_DELAYS)):
+        if delay:
+            log.warning("Rate-limited by Yahoo Finance -- waiting %ds before retry %d/%d", delay, attempt, len(_RATE_LIMIT_RETRY_DELAYS))
+            time.sleep(delay)
+        try:
+            return fn()
+        except YFRateLimitError as exc:
+            last_exc = exc
+            continue
+    raise last_exc
 
 
 class MarketDataError(Exception):
@@ -80,19 +113,27 @@ def fetch_price_history_covering(
 def _fetch_from_yfinance(ticker: str, lookback_days: int) -> pd.DataFrame | None:
     try:
         market_data_rate_limiter.wait()
-        hist = yf.Ticker(ticker).history(period=f"{lookback_days}d", auto_adjust=True)
+        hist = _call_with_rate_limit_retry(lambda: yf.Ticker(ticker).history(period=f"{lookback_days}d", auto_adjust=True))
         if hist is None or hist.empty:
+            # A clean empty response (not an exception) is a real "no data
+            # for this ticker" -- e.g. a bad symbol -- not a source outage.
+            health.record_success(health.MARKET_DATA, detail="empty response")
             return None
         hist = hist.rename(columns=str.lower)[["open", "high", "low", "close", "volume"]]
         hist.index.name = "date"
+        health.record_success(health.MARKET_DATA)
         return hist
     except Exception as exc:  # yfinance can raise a variety of network/parse errors
         log.warning("yfinance failed for %s: %s", ticker, exc)
+        health.record_failure(health.MARKET_DATA, detail=str(exc))
         return None
 
 
 def _fetch_from_finnhub(ticker: str, lookback_days: int) -> pd.DataFrame | None:
     if not settings.FINNHUB_API_KEY:
+        # Only a fallback for yfinance, and yfinance already recorded its
+        # own failure -- don't overwrite that with "not configured", which
+        # would hide a real yfinance outage behind an unrelated message.
         return None
     try:
         import time
@@ -126,9 +167,13 @@ def _fetch_from_finnhub(ticker: str, lookback_days: int) -> pd.DataFrame | None:
             index=pd.to_datetime(payload["t"], unit="s"),
         )
         df.index.name = "date"
+        # Recovered via the fallback -- overall market-data availability is
+        # OK even though yfinance itself just failed for this ticker.
+        health.record_success(health.MARKET_DATA, detail="finnhub fallback")
         return df
     except Exception as exc:
         log.warning("Finnhub fallback failed for %s: %s", ticker, exc)
+        health.record_failure(health.MARKET_DATA, detail=f"finnhub fallback: {exc}")
         return None
 
 
@@ -144,11 +189,13 @@ def _fetch_info(ticker: str) -> dict:
     company_name = None
     try:
         market_data_rate_limiter.wait()
-        info = yf.Ticker(ticker).get_info()
+        info = _call_with_rate_limit_retry(lambda: yf.Ticker(ticker).get_info())
         market_cap = info.get("marketCap")
         company_name = info.get("longName") or info.get("shortName")
+        health.record_success(health.MARKET_DATA)
     except Exception as exc:
         log.warning("Failed to fetch info for %s: %s", ticker, exc)
+        health.record_failure(health.MARKET_DATA, detail=str(exc))
 
     result = {"market_cap": market_cap, "company_name": company_name}
     _info_cache.set(ticker, result)
@@ -166,3 +213,53 @@ def fetch_company_name(ticker: str) -> str | None:
     names) -- returns None if unavailable rather than guessing from the
     ticker symbol."""
     return _fetch_info(ticker).get("company_name")
+
+
+def fetch_insider_transactions(ticker: str) -> list[dict]:
+    """Recent Form-4-derived insider transactions (Yahoo's aggregated feed,
+    not a raw SEC parse) for the insider_buying signal.
+
+    Column names below (Start Date, Insider, Position, Text, Shares, Value,
+    Ownership) match yfinance's Holders._parse_insider_transactions exactly
+    -- confirmed by reading yfinance/scrapers/holders.py directly (this
+    package is installed locally even though this environment can't reach
+    Yahoo's servers to actually call it; see market_data.py's module note
+    and scripts/validate_live_data.py), not guessed. "Text" is Yahoo's free
+    -text transaction description (e.g. "Purchase at price X", "Sale at
+    price X", "Option Exercise") -- there's no separate structured
+    transaction-code field, so the insider_buying signal matches on that
+    text rather than the SEC Form 4 transaction code (P/S/A/M/etc.)
+    directly, which this feed doesn't expose.
+
+    Returns [] if yfinance has nothing for this ticker or the call fails --
+    never raises. Each dict: {"start_date" (ISO), "insider", "position",
+    "text", "shares", "value", "ownership"}.
+    """
+    cached = _insider_cache.get(ticker)
+    if cached is not None:
+        return cached
+
+    result: list[dict] = []
+    try:
+        market_data_rate_limiter.wait()
+        df = _call_with_rate_limit_retry(lambda: yf.Ticker(ticker).get_insider_transactions())
+        health.record_success(health.MARKET_DATA)
+        if df is not None and not df.empty:
+            for _, row in df.iterrows():
+                start_date = row.get("Start Date")
+                result.append({
+                    "start_date": start_date.date().isoformat() if pd.notna(start_date) else None,
+                    "insider": row.get("Insider"),
+                    "position": row.get("Position"),
+                    "text": row.get("Text"),
+                    "shares": row.get("Shares"),
+                    "value": row.get("Value"),
+                    "ownership": row.get("Ownership"),
+                })
+    except Exception as exc:
+        log.warning("Failed to fetch insider transactions for %s: %s", ticker, exc)
+        health.record_failure(health.MARKET_DATA, detail=str(exc))
+        return []
+
+    _insider_cache.set(ticker, result)
+    return result

@@ -9,6 +9,13 @@ AXSM: Axsome Therapeutics, Inc.
 SRPT: Sarepta Therapeutics, Inc.
 IONS: Ionis Pharmaceuticals, Inc.
 BCAB: BioAtla, Inc.
-SAVA: Cassava Sciences, Inc.
+# Cassava Sciences, Inc. renamed to Filana Therapeutics, Inc. effective
+# 2026-03-11 (ticker SAVA -> FLNA). Listed as a ticker: [aliases] since
+# trials registered before the rename may still carry the old sponsor name
+# on ClinicalTrials.gov -- see joebot/signals/catalyst_clinical.py's
+# module docstring for how multi-alias entries are handled.
+FLNA:
+  - Filana Therapeutics, Inc.
+  - Cassava Sciences, Inc.
 IBRX: ImmunityBio, Inc.
 RXRX: Recursion Pharmaceuticals, Inc.

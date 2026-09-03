@@ -12,8 +12,8 @@ from __future__ import annotations
 
 import datetime as dt
 
-from joebot.data import reddit_client
-from joebot.signals.base import SignalResult
+from joebot.data import health, reddit_client
+from joebot.signals.base import SignalResult, with_source_status
 
 DEFAULT_LOOKBACK_DAYS = 14
 
@@ -24,6 +24,7 @@ class SentimentRedditSignal:
     def __init__(self, lookback_days: int = DEFAULT_LOOKBACK_DAYS):
         self.lookback_days = lookback_days
 
+    @with_source_status(health.REDDIT)
     def score(self, ticker: str, as_of_date: dt.date) -> SignalResult:
         mentions = reddit_client.fetch_mentions(ticker, as_of_date, self.lookback_days)
 

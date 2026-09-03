@@ -20,8 +20,8 @@ from __future__ import annotations
 
 import datetime as dt
 
-from joebot.data import market_data, patents_client
-from joebot.signals.base import SignalResult
+from joebot.data import health, market_data, patents_client
+from joebot.signals.base import SignalResult, with_source_status
 
 DEFAULT_LOOKBACK_DAYS = 730  # 2 years, since patent activity is a slow-moving signal
 
@@ -32,6 +32,7 @@ class PatentActivitySignal:
     def __init__(self, lookback_days: int = DEFAULT_LOOKBACK_DAYS):
         self.lookback_days = lookback_days
 
+    @with_source_status(health.PATENTS, health.MARKET_DATA)
     def score(self, ticker: str, as_of_date: dt.date) -> SignalResult:
         company_name = market_data.fetch_company_name(ticker)
         if not company_name:
@@ -61,5 +62,9 @@ class PatentActivitySignal:
                 "earlier_count": len(earlier),
                 "velocity_ratio": round(velocity_ratio, 2),
                 "sample_titles": [p.title for p in recent[:3] if p.title],
+                "recent_patents": [
+                    {"title": p.title, "date": p.patent_date.isoformat() if p.patent_date else None}
+                    for p in sorted(recent, key=lambda p: p.patent_date or dt.date.min, reverse=True)[:5]
+                ],
             },
         )

@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import datetime as dt
 
-from joebot.data import gov_contracts_client, market_data
-from joebot.signals.base import SignalResult
+from joebot.data import gov_contracts_client, health, market_data
+from joebot.signals.base import SignalResult, with_source_status
 
 DEFAULT_LOOKBACK_DAYS = 180
 
@@ -22,6 +22,7 @@ class GovContractSignal:
     def __init__(self, lookback_days: int = DEFAULT_LOOKBACK_DAYS):
         self.lookback_days = lookback_days
 
+    @with_source_status(health.USASPENDING, health.MARKET_DATA)
     def score(self, ticker: str, as_of_date: dt.date) -> SignalResult:
         company_name = market_data.fetch_company_name(ticker)
         if not company_name:

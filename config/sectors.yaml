@@ -86,7 +86,7 @@ pharma:
     - SRPT   # Sarepta Therapeutics
     - IONS   # Ionis Pharmaceuticals
     - BCAB   # BioAtla
-    - SAVA   # Cassava Sciences
+    - FLNA   # Filana Therapeutics -- renamed from Cassava Sciences (SAVA -> FLNA, effective 2026-03-11)
     - IBRX   # ImmunityBio
     - RXRX   # Recursion Pharmaceuticals
 

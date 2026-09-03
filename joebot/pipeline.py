@@ -8,10 +8,11 @@ from __future__ import annotations
 import datetime as dt
 import logging
 
+from joebot.data import health
 from joebot.screener.composite import RankedCandidate
-from joebot.screener.sector_screens import run_all_sectors
+from joebot.screener.sector_screens import ScreenResult, run_all_sectors
 from joebot.storage.db import get_session
-from joebot.storage.models import Candidate, FilingEvent, ScanRun, SignalHistory
+from joebot.storage.models import Candidate, DataHealthRecord, FilingEvent, ScanRun, SignalHistory
 
 log = logging.getLogger(__name__)
 
@@ -25,18 +26,39 @@ def run_daily_scan(as_of_date: dt.date | None = None) -> list[RankedCandidate]:
     """Run the full sector screener and persist results. Returns ranked candidates."""
     as_of_date = as_of_date or dt.date.today()
 
-    candidates = run_all_sectors(as_of_date)
-    _persist_scan(as_of_date, candidates)
-    return candidates
+    # Reset before scanning so this run's persisted Data Health snapshot
+    # reflects only this run's calls -- a long-lived process (the Streamlit
+    # dashboard, across repeated "Re-run scan now" clicks) would otherwise
+    # carry stale status from a previous run for any source this run never
+    # happened to call again (e.g. skipped due to an empty candidate list).
+    health.reset()
+
+    result = run_all_sectors(as_of_date)
+    if result.skipped:
+        log.warning(
+            "%d/%d tickers were skipped entirely this scan (every signal failed) -- see Data Health / this log for why: %s",
+            len(result.skipped), result.attempted,
+            ", ".join(f"{s.ticker} ({s.reason})" for s in result.skipped[:10]),
+        )
+    _persist_scan(as_of_date, result)
+    return result.candidates
 
 
-def _persist_scan(as_of_date: dt.date, candidates: list[RankedCandidate]) -> None:
+def _persist_scan(as_of_date: dt.date, result: ScreenResult) -> None:
+    candidates = result.candidates
     session = get_session()
     try:
         existing_accessions = {row[0] for row in session.query(FilingEvent.accession_no).all()}
         seen_this_run: set[str] = set()
 
-        scan_run = ScanRun(run_at=dt.datetime.utcnow(), as_of_date=as_of_date.isoformat())
+        scan_run = ScanRun(
+            run_at=dt.datetime.utcnow(),
+            as_of_date=as_of_date.isoformat(),
+            tickers_attempted=result.attempted,
+            tickers_skipped_json=[
+                {"ticker": s.ticker, "sector": s.sector, "reason": s.reason} for s in result.skipped
+            ],
+        )
         session.add(scan_run)
         session.flush()  # assigns scan_run.id
 
@@ -78,6 +100,18 @@ def _persist_scan(as_of_date: dt.date, candidates: list[RankedCandidate]) -> Non
                                 metadata_json=raw,
                             )
                         )
+
+        for source, source_health in health.snapshot().items():
+            session.add(DataHealthRecord(
+                scan_run_id=scan_run.id,
+                source=source,
+                status=source_health.status,
+                detail=source_health.detail,
+                call_count=source_health.call_count,
+                failure_count=source_health.failure_count,
+                last_success_at=source_health.last_success_at,
+                last_attempt_at=source_health.last_attempt_at,
+            ))
 
         session.commit()
     finally:

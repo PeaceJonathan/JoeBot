@@ -9,7 +9,7 @@ import datetime as dt
 from joebot.screener.composite import RankedCandidate
 from joebot.signals.base import SignalResult
 from joebot.storage.db import get_session
-from joebot.storage.models import BacktestRun, Candidate, ScanRun, SignalAttributionRecord
+from joebot.storage.models import BacktestRun, Candidate, DataHealthRecord, ScanRun, SignalAttributionRecord
 
 
 @dataclasses.dataclass
@@ -19,6 +19,7 @@ class CandidateView:
     composite_score: float
     rank: int
     signals: dict[str, dict]  # signal_name -> {"score", "confidence", "metadata"}
+    as_of_date: str | None = None
 
     def to_ranked_candidate(self) -> RankedCandidate:
         """Reconstructs a RankedCandidate (SignalResult objects, not plain
@@ -32,6 +33,7 @@ class CandidateView:
                 name: SignalResult(score=s["score"], confidence=s["confidence"], metadata=s["metadata"])
                 for name, s in self.signals.items()
             },
+            as_of_date=dt.date.fromisoformat(self.as_of_date) if self.as_of_date else None,
         )
 
 
@@ -46,6 +48,8 @@ def latest_scan_run() -> ScanRun | None:
 def candidates_for_run(scan_run_id: int) -> list[CandidateView]:
     session = get_session()
     try:
+        scan_run = session.get(ScanRun, scan_run_id)
+        as_of_date = scan_run.as_of_date if scan_run else None
         rows = (
             session.query(Candidate)
             .filter(Candidate.scan_run_id == scan_run_id)
@@ -60,7 +64,7 @@ def candidates_for_run(scan_run_id: int) -> list[CandidateView]:
             }
             views.append(CandidateView(
                 ticker=row.ticker, sector=row.sector, composite_score=row.composite_score,
-                rank=row.rank, signals=signals,
+                rank=row.rank, signals=signals, as_of_date=as_of_date,
             ))
         return views
     finally:
@@ -80,6 +84,29 @@ def list_backtest_runs(limit: int = 20) -> list[BacktestRun]:
         return session.query(BacktestRun).order_by(BacktestRun.run_at.desc()).limit(limit).all()
     finally:
         session.close()
+
+
+def data_health_for_run(scan_run_id: int) -> list[DataHealthRecord]:
+    session = get_session()
+    try:
+        return (
+            session.query(DataHealthRecord)
+            .filter(DataHealthRecord.scan_run_id == scan_run_id)
+            .order_by(DataHealthRecord.source)
+            .all()
+        )
+    finally:
+        session.close()
+
+
+def latest_data_health() -> tuple[ScanRun | None, list[DataHealthRecord]]:
+    """Data Health as of the most recent scan -- whichever process ran it
+    (cron job or dashboard), since this reads the persisted snapshot rather
+    than joebot/data/health.py's in-process registry directly."""
+    run = latest_scan_run()
+    if run is None:
+        return None, []
+    return run, data_health_for_run(run.id)
 
 
 def attributions_for_run(backtest_run_id: int) -> list[SignalAttributionRecord]:

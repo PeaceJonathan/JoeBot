@@ -21,6 +21,11 @@ class RankedCandidate:
     sector: str
     composite_score: float
     signal_results: dict[str, SignalResult] = field(default_factory=dict)
+    # Optional: the date this candidate was scored as of. Populated by
+    # score_ticker(); left as None for candidates built directly in tests.
+    # Used by joebot/reporting/narrative.py to resolve signals' relative
+    # "days ago" metadata into absolute dates for the event timeline.
+    as_of_date: dt.date | None = None
 
 
 def score_ticker(
@@ -45,7 +50,9 @@ def score_ticker(
         weight_total += effective_weight
 
     composite = weighted_sum / weight_total if weight_total > 0 else 0.0
-    return RankedCandidate(ticker=ticker, sector=sector, composite_score=composite, signal_results=results)
+    return RankedCandidate(
+        ticker=ticker, sector=sector, composite_score=composite, signal_results=results, as_of_date=as_of_date,
+    )
 
 
 def rank_candidates(candidates: list[RankedCandidate]) -> list[RankedCandidate]:
