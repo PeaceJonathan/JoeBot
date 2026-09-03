@@ -15,8 +15,8 @@ import datetime as dt
 import yaml
 
 from config import settings
-from joebot.data import clinicaltrials_client
-from joebot.signals.base import SignalResult
+from joebot.data import clinicaltrials_client, health
+from joebot.signals.base import SignalResult, with_source_status
 
 DEFAULT_LOOKBACK_DAYS = 120
 
@@ -44,6 +44,7 @@ class ClinicalTrialSignal:
     def __init__(self, lookback_days: int = DEFAULT_LOOKBACK_DAYS):
         self.lookback_days = lookback_days
 
+    @with_source_status(health.CLINICALTRIALS)
     def score(self, ticker: str, as_of_date: dt.date) -> SignalResult:
         sponsor_name = _load_crosswalk().get(ticker)
         if not sponsor_name:
@@ -81,5 +82,6 @@ class ClinicalTrialSignal:
                 "phase": most_recent.phase,
                 "status": most_recent.status,
                 "days_since_update": days_ago,
+                "last_update_date": most_recent.last_update_date.isoformat(),
             },
         )

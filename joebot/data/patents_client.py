@@ -25,6 +25,7 @@ from dataclasses import dataclass
 
 import requests
 
+from joebot.data import health
 from joebot.data.cache import DiskCache
 
 log = logging.getLogger(__name__)
@@ -68,6 +69,7 @@ def _fetch_patents_uncached(assignee_organization: str) -> list[dict]:
     api_key = _api_key()
     if not api_key:
         log.info("PATENTSVIEW_API_KEY not configured -- patent_activity signal will score 0 for everything.")
+        health.record_not_configured(health.PATENTS, detail="PATENTSVIEW_API_KEY not set")
         return []
 
     query = {
@@ -80,8 +82,10 @@ def _fetch_patents_uncached(assignee_organization: str) -> list[dict]:
         resp = requests.post(API_URL, json=query, headers={"X-Api-Key": api_key}, timeout=15)
         resp.raise_for_status()
         payload = resp.json()
+        health.record_success(health.PATENTS)
     except Exception as exc:
         log.warning("PatentsView lookup failed for %r: %s", assignee_organization, exc)
+        health.record_failure(health.PATENTS, detail=str(exc))
         return []
 
     results = []

@@ -20,7 +20,16 @@ if str(ROOT_DIR) not in sys.path:
 
 import streamlit as st  # noqa: E402
 
-from dashboard.views import backtest, budget, today  # noqa: E402
+from dashboard.views import (  # noqa: E402
+    backtest,
+    budget,
+    candidate_detail,
+    catalysts,
+    data_health,
+    discover,
+    settings_view,
+    today,
+)
 from joebot import pipeline  # noqa: E402
 
 st.set_page_config(page_title="JoeBot", layout="wide")
@@ -48,11 +57,33 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-    page = st.radio("View", ["Today's Picks", "Budget Calculator", "Backtest Results"])
+    page = st.radio(
+        "View",
+        [
+            "Dashboard",
+            "Discover",
+            "Candidate Detail",
+            "Catalysts",
+            "Research",
+            "Portfolio",
+            "Data Health",
+            "Settings",
+        ],
+    )
 
-if page == "Today's Picks":
+if page == "Dashboard":
     today.render(risk_slider)
-elif page == "Budget Calculator":
-    budget.render(risk_slider)
-else:
+elif page == "Discover":
+    discover.render()
+elif page == "Candidate Detail":
+    candidate_detail.render()
+elif page == "Catalysts":
+    catalysts.render()
+elif page == "Research":
     backtest.render()
+elif page == "Portfolio":
+    budget.render(risk_slider)
+elif page == "Data Health":
+    data_health.render()
+else:
+    settings_view.render()

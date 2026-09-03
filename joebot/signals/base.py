@@ -6,8 +6,11 @@ special-casing each one.
 from __future__ import annotations
 
 import datetime as dt
+import functools
 from dataclasses import dataclass, field
 from typing import Any, Protocol
+
+from joebot.data import health
 
 
 @dataclass
@@ -37,6 +40,32 @@ class Signal(Protocol):
 
     def score(self, ticker: str, as_of_date: dt.date) -> SignalResult:
         ...
+
+
+def with_source_status(*sources: str):
+    """Decorator for a Signal's score() method: stamps
+    metadata["data_source_status"] with each declared external source's
+    current health.SourceHealth.status (health.OK / UNAVAILABLE /
+    NOT_CONFIGURED) after the scoring logic runs.
+
+    This is what makes "no evidence found" and "data source unavailable"
+    distinguishable downstream (narrative.py, the dashboard's Data Health
+    panel) without every signal having to thread status through each of its
+    own return statements by hand -- a signal often has several early
+    returns (missing crosswalk entry, empty result, successful score), and
+    the source's health is the same regardless of which branch fired.
+    """
+
+    def decorator(score_fn):
+        @functools.wraps(score_fn)
+        def wrapper(self, ticker: str, as_of_date: dt.date) -> SignalResult:
+            result = score_fn(self, ticker, as_of_date)
+            result.metadata["data_source_status"] = {s: health.get_status(s).status for s in sources}
+            return result
+
+        return wrapper
+
+    return decorator
 
 
 # Signals whose primary driver is a single binary/event-risk-heavy fact (an

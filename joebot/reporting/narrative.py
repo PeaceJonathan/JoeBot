@@ -15,8 +15,10 @@ addition, not something to fake from what's on hand.
 from __future__ import annotations
 
 import dataclasses
+import datetime as dt
 from typing import Callable
 
+from joebot.data import health
 from joebot.screener.composite import RankedCandidate
 from joebot.signals.base import BINARY_CATALYST_SIGNALS, SignalResult
 
@@ -24,6 +26,21 @@ from joebot.signals.base import BINARY_CATALYST_SIGNALS, SignalResult
 # all -- a signal that fired weakly (or not at all) shouldn't clutter the
 # narrative with a non-finding.
 BULLET_SCORE_THRESHOLD = 0.15
+
+# Bear-case factors this project has no data source for at all (as opposed
+# to "checked this source and it's fine"). Section 11's bear-case list asks
+# for these explicitly; rather than silently omitting them (which would
+# read as "checked, no issue") or faking a number, every candidate's bear
+# case says outright that these were never evaluated -- per the project's
+# hardest rule: don't hide uncertainty, don't manufacture confidence.
+UNCHECKED_BEAR_CASE_FACTORS = (
+    "share dilution / share count trend",
+    "customer concentration",
+    "insider selling (only insider *buying*-adjacent activity via 13D/13G is tracked)",
+    "short interest",
+    "competitive positioning",
+    "regulatory risk beyond what an 8-K/13D happens to disclose",
+)
 
 
 @dataclasses.dataclass
@@ -34,6 +51,8 @@ class NarrativeCard:
     verdict: str
     why_bullets: list[str]
     risk_bullets: list[str]
+    data_gap_bullets: list[str] = dataclasses.field(default_factory=list)
+    timeline: list[str] = dataclasses.field(default_factory=list)
 
 
 def _fmt_pct(x: float | None, decimals: int = 1) -> str:
@@ -182,7 +201,111 @@ def _risk_bullets(candidate: RankedCandidate) -> list[str]:
         "Not yet validated by a real backtest run on this repo -- run scripts/run_backtest.py "
         "and check n_observations before weighting this heavily."
     )
+    bullets.append(
+        "Not checked at all (no data source in this project): " + "; ".join(UNCHECKED_BEAR_CASE_FACTORS) + "."
+    )
     return bullets
+
+
+def _data_gap_bullets(candidate: RankedCandidate) -> list[str]:
+    """Surfaces every signal whose underlying source was UNAVAILABLE (a
+    failed live call) or NOT_CONFIGURED (an optional source with no
+    credentials) during this scan, so a 0.0 contribution to the composite
+    score is never silently read as "checked, nothing there" -- see
+    joebot/data/health.py and joebot/signals/base.py::with_source_status.
+    """
+    bullets = []
+    seen: set[tuple[str, str]] = set()
+    for signal_name, result in candidate.signal_results.items():
+        statuses = result.metadata.get("data_source_status") or {}
+        for source, status in statuses.items():
+            if status == health.OK or (source, status) in seen:
+                continue
+            seen.add((source, status))
+            display = health.DISPLAY_NAMES.get(source, source)
+            if status == health.UNAVAILABLE:
+                bullets.append(
+                    f"{signal_name}: {display} was unreachable during this scan -- this signal's score "
+                    "reflects incomplete data, not a confirmed absence of evidence."
+                )
+            elif status == health.NOT_CONFIGURED and result.score == 0.0:
+                bullets.append(f"{signal_name}: {display} isn't configured (optional) -- this signal wasn't evaluated at all.")
+    return bullets
+
+
+def _event_timeline(candidate: RankedCandidate) -> list[str]:
+    """Chronological list of dated events pulled from every signal's own
+    metadata (filing dates, contract award dates, trial update dates,
+    patent dates) -- a single score hides *when* things happened; this
+    doesn't. Sorted oldest-first, per section 23's example format.
+    """
+    events: list[tuple[dt.date, str]] = []
+
+    def _add(raw_date: str | None, description: str) -> None:
+        if not raw_date:
+            return
+        try:
+            events.append((dt.date.fromisoformat(raw_date[:10]), description))
+        except ValueError:
+            pass
+
+    for signal_name in ("activist_stake", "leadership_change"):
+        result = candidate.signal_results.get(signal_name)
+        if not result:
+            continue
+        for f in result.metadata.get("filings", []):
+            if signal_name == "activist_stake":
+                filer = f.get("filer_name") or "an undisclosed filer"
+                _add(f.get("filing_date"), f"{f.get('form', 'Ownership filing')} filed by {filer}")
+            else:
+                _add(f.get("filing_date"), "8-K disclosing an officer/director change")
+
+    gov = candidate.signal_results.get("gov_contract")
+    if gov:
+        for a in gov.metadata.get("awards", []):
+            amount = a.get("amount")
+            amount_str = f"${amount:,.0f}" if isinstance(amount, (int, float)) else "undisclosed amount"
+            agency = a.get("agency")
+            _add(a.get("date"), f"Government contract award ({amount_str}{f', {agency}' if agency else ''})")
+
+    clinical = candidate.signal_results.get("clinical_trial")
+    if clinical and clinical.metadata.get("nct_id"):
+        m = clinical.metadata
+        _add(m.get("last_update_date"), f"Clinical trial {m.get('nct_id')} ({m.get('phase')}) updated -- status: {m.get('status')}")
+
+    patents = candidate.signal_results.get("patent_activity")
+    if patents:
+        for p in patents.metadata.get("recent_patents", []):
+            title = p.get("title") or "patent filing"
+            _add(p.get("date"), f"Patent filed: {title}")
+
+    events.sort(key=lambda e: e[0])
+    return [f"{d.isoformat()} -- {desc}" for d, desc in events]
+
+
+def build_event_feed(candidates: list[RankedCandidate], lookback_days: int = 30) -> list[tuple[str, str, str]]:
+    """Cross-candidate feed of recent dated events (ticker, date, description),
+    most-recent-first, for the dashboard's Catalysts page (section 22/23).
+
+    Deliberately events that ALREADY happened, not a forward-looking
+    calendar (PDUFA dates, scheduled earnings) -- this project has no data
+    source for genuinely upcoming events, and section 28/29's rule against
+    fabricating data applies here too. See this module's docstring.
+    """
+    feed: list[tuple[dt.date, str, str]] = []
+    for candidate in candidates:
+        cutoff = (candidate.as_of_date or dt.date.today()) - dt.timedelta(days=lookback_days)
+        for entry in _event_timeline(candidate):
+            date_str, _, desc = entry.partition(" -- ")
+            try:
+                d = dt.date.fromisoformat(date_str)
+            except ValueError:
+                continue
+            if d >= cutoff:
+                feed.append((d, candidate.ticker, desc))
+
+    feed.sort(key=lambda e: e[0], reverse=True)
+    return [(d.isoformat(), ticker, desc) for d, ticker, desc in feed]
 
 
 def build_narrative(candidate: RankedCandidate) -> NarrativeCard:
@@ -207,4 +330,6 @@ def build_narrative(candidate: RankedCandidate) -> NarrativeCard:
         verdict=_verdict(candidate.composite_score),
         why_bullets=why_bullets,
         risk_bullets=_risk_bullets(candidate),
+        data_gap_bullets=_data_gap_bullets(candidate),
+        timeline=_event_timeline(candidate),
     )

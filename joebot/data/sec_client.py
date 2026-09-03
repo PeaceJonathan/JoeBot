@@ -13,15 +13,30 @@ SEC requires a real, identifying User-Agent on every request and asks
 callers to stay under 10 req/sec -- both are enforced here, not left to
 each call site.
 
-NOTE on Phase 2 field extraction: edgartools' parsed-object attribute names
-for SC 13D/13G (reporting-owner identity, stake percentage) and 8-K item
-codes were not verified against live data -- this sandbox's network policy
-blocks outbound SEC EDGAR access (see README/plan notes on the Phase 1
-verification gap). The code below tries several plausible attribute names
-defensively and fails soft to "unknown"/None rather than raising, but the
-Phase 2 verification step (backfill known catalyst events and confirm the
-right filing is flagged) still needs to run once on a machine with real
-network access, and field-name assumptions here may need adjusting then.
+NOTE on Phase 2 field extraction, updated after a source-level (not live)
+verification pass against the actually-installed edgartools==5.56.0: this
+sandbox's network policy still blocks outbound SEC EDGAR access, so nothing
+here has been exercised against a real HTTP response. But edgartools is a
+local Python package, so its actual class definitions were read directly
+(see edgar/_filings.py, edgar/sgml/sgml_header.py, edgar/company_reports/
+current_report.py) to confirm attribute names rather than guessing:
+- Filing.filing_date and Filing.accession_no are real, plain instance
+  attributes (confirmed correct as originally guessed).
+- Filing.obj() for an 8-K returns an EightK whose .items property returns
+  strings like "Item 5.02" (confirmed correct as originally guessed).
+- Filing.company is the SUBJECT company (the ticker itself), NOT the
+  reporting owner on a SC 13D/13G -- the original code's fallback chain
+  ("filer", "reporting_owner", "company") would have silently returned the
+  ticker's own name as the "activist," which is wrong. The real reporting
+  owner lives at Filing.header.reporting_owners (a list of ReportingOwner,
+  each with .owner.name) -- see the SC 13D/13G branch below, fixed
+  accordingly. header.filers[].company_information.name is used only as a
+  last-resort fallback (the subject company, clearly labeled as such if it
+  ever surfaces).
+This closes the source-level verification gap; a live smoke test (see
+scripts/validate_live_data.py) is still needed to catch anything this
+static reading missed (e.g. reporting_owners being empty on some filing
+eras/forms).
 """
 from __future__ import annotations
 
@@ -31,6 +46,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from config import settings
+from joebot.data import health
 from joebot.data.cache import DiskCache, sec_rate_limiter
 
 log = logging.getLogger(__name__)
@@ -111,9 +127,20 @@ def _fetch_fundamental_snapshot_uncached(ticker: str) -> FundamentalSnapshot:
         sec_rate_limiter.wait()
         company = edgar.Company(ticker)
         facts = company.get_facts()
-        df = facts.to_pandas()
+        if facts is None:
+            health.record_success(health.SEC, detail="no facts for ticker")
+            return FundamentalSnapshot(None, None, None)
+        # NOTE: edgartools' EntityFacts has to_dataframe(), not to_pandas() --
+        # verified by reading edgar/entity/entity_facts.py directly (see
+        # module docstring). to_pandas() doesn't exist on this class; calling
+        # it here previously raised AttributeError on every ticker, silently
+        # caught below, so fundamental_sanity always fell back to "no usable
+        # XBRL data" regardless of what SEC actually had on file.
+        df = facts.to_dataframe(include_metadata=True)
+        health.record_success(health.SEC)
     except Exception as exc:
         log.warning("SEC fact lookup failed for %s: %s", ticker, exc)
+        health.record_failure(health.SEC, detail=str(exc))
         return FundamentalSnapshot(None, None, None)
 
     revenue_latest, revenue_prior = _latest_two_annual(df, concept_candidates=(
@@ -127,27 +154,32 @@ def _fetch_fundamental_snapshot_uncached(ticker: str) -> FundamentalSnapshot:
 
 
 def _latest_two_annual(df, concept_candidates: tuple[str, ...]) -> tuple[float | None, float | None]:
-    """Return (latest, prior) values for the first matching concept found.
+    """Return (latest, prior) annual (fiscal_period == "FY") values for the
+    first matching concept found.
 
-    Defensive against edgartools' facts DataFrame schema varying by version --
-    if expected columns aren't present, fail soft (None, None) rather than
-    raising, since a single ticker's odd tagging shouldn't crash a full scan.
+    Column names (concept, value, period_end, fiscal_period) match
+    EntityFacts.to_dataframe()'s documented schema in edgartools 5.56.0 --
+    confirmed by reading edgar/entity/entity_facts.py, not guessed. The
+    "FY"-only filter avoids mixing quarterly (10-Q) and annual (10-K)
+    values when picking "latest two" -- without it, a company's most recent
+    quarterly filing could be compared against a prior annual figure as if
+    both were annual, understating or fabricating a growth rate.
     """
     if df is None or df.empty:
         return None, None
 
-    concept_col = next((c for c in ("concept", "fact", "name") if c in df.columns), None)
-    value_col = next((c for c in ("value", "val") if c in df.columns), None)
-    period_col = next((c for c in ("period_end", "end", "fiscal_period") if c in df.columns), None)
-    if not (concept_col and value_col and period_col):
+    if not {"concept", "value", "period_end"}.issubset(df.columns):
         return None, None
 
     for concept in concept_candidates:
-        rows = df[df[concept_col] == concept]
+        rows = df[df["concept"] == concept]
         if rows.empty:
             continue
-        rows = rows.sort_values(period_col, ascending=False)
-        values = rows[value_col].tolist()
+        if "fiscal_period" in rows.columns and (rows["fiscal_period"] == "FY").any():
+            rows = rows[rows["fiscal_period"] == "FY"]
+        rows = rows.dropna(subset=["value"]).sort_values("period_end", ascending=False)
+        rows = rows.drop_duplicates(subset=["period_end"], keep="first")
+        values = rows["value"].tolist()
         latest = float(values[0]) if len(values) > 0 else None
         prior = float(values[1]) if len(values) > 1 else None
         return latest, prior
@@ -231,22 +263,37 @@ def _fetch_ownership_filings_uncached(ticker: str) -> list[dict]:
                     })
                 except Exception as exc:
                     log.warning("Failed to parse a %s filing for %s: %s", form, ticker, exc)
+        health.record_success(health.SEC)
     except Exception as exc:
         log.warning("SEC ownership filing lookup failed for %s: %s", ticker, exc)
+        health.record_failure(health.SEC, detail=str(exc))
 
     return results
 
 
 def _extract_filer_name(filing: Any) -> str | None:
-    """Best-effort reporting-owner name extraction -- see module docstring
-    note on unverified edgartools attribute names."""
-    for attr_path in ("filer", "reporting_owner", "company"):
-        try:
-            value = getattr(filing, attr_path, None)
-            if value:
-                return str(value)
-        except Exception:
-            continue
+    """Reporting-owner (the activist/holder, not the subject company) name
+    extraction for a SC 13D/13G filing.
+
+    Filing.company is the SUBJECT company (the ticker being filed about),
+    never the reporting owner -- using it here would misreport "the company
+    disclosed a stake in itself." The real reporting-owner identity is on
+    the SGML header at .header.reporting_owners[i].owner.name (see module
+    docstring for how this was confirmed by reading edgartools' source).
+    """
+    try:
+        header = getattr(filing, "header", None)
+        reporting_owners = getattr(header, "reporting_owners", None) if header else None
+        if reporting_owners:
+            names = [ro.owner.name for ro in reporting_owners if getattr(ro, "owner", None) and ro.owner.name]
+            if names:
+                return "; ".join(names)
+    except Exception as exc:
+        log.warning("Failed to extract reporting_owners from filing header: %s", exc)
+
+    # No reporting_owners on the header -- report unknown rather than fall
+    # back to Filing.company (the subject company), which would misattribute
+    # the stake to the company disclosing it about itself.
     return None
 
 
@@ -292,15 +339,18 @@ def _fetch_8k_filings_uncached(ticker: str) -> list[dict]:
                 })
             except Exception as exc:
                 log.warning("Failed to parse an 8-K for %s: %s", ticker, exc)
+        health.record_success(health.SEC)
     except Exception as exc:
         log.warning("SEC 8-K lookup failed for %s: %s", ticker, exc)
+        health.record_failure(health.SEC, detail=str(exc))
 
     return results
 
 
 def _extract_8k_items(filing: Any) -> list[str]:
-    """Best-effort 8-K item-code extraction -- see module docstring note on
-    unverified edgartools attribute names."""
+    """8-K item-code extraction. Filing.obj() -> EightK.items returns strings
+    like "Item 5.02" -- confirmed by reading
+    edgar/company_reports/current_report.py directly (see module docstring)."""
     try:
         obj = filing.obj()
         raw_items = getattr(obj, "items", None)

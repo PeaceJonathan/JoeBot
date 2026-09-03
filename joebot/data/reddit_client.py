@@ -22,6 +22,7 @@ import datetime as dt
 import logging
 
 from config import settings
+from joebot.data import health
 from joebot.data.cache import DiskCache
 
 log = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ def _get_client():
 
     if not (settings.REDDIT_CLIENT_ID and settings.REDDIT_CLIENT_SECRET):
         log.info("Reddit credentials not configured -- sentiment_reddit signal will score 0 for everything.")
+        health.record_not_configured(health.REDDIT, detail="REDDIT_CLIENT_ID/SECRET not set")
         return None
 
     try:
@@ -55,6 +57,7 @@ def _get_client():
         )
     except Exception as exc:
         log.warning("Failed to initialize Reddit client: %s", exc)
+        health.record_failure(health.REDDIT, detail=str(exc))
         _client = None
 
     return _client
@@ -97,8 +100,10 @@ def _fetch_mentions_uncached(ticker: str, subreddits: tuple[str, ...]) -> list[d
                     "title": submission.title,
                     "score": submission.score,
                 })
+        health.record_success(health.REDDIT)
     except Exception as exc:
         log.warning("Reddit mention fetch failed for %s: %s", ticker, exc)
+        health.record_failure(health.REDDIT, detail=str(exc))
         return []
 
     return results

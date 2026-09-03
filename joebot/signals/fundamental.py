@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import datetime as dt
 
-from joebot.data import sec_client
-from joebot.signals.base import SignalResult
+from joebot.data import health, sec_client
+from joebot.signals.base import SignalResult, with_source_status
 
 
 class FundamentalSanitySignal:
     name = "fundamental_sanity"
 
+    @with_source_status(health.SEC)
     def score(self, ticker: str, as_of_date: dt.date) -> SignalResult:
         snapshot = sec_client.fetch_fundamental_snapshot(ticker)
 

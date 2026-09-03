@@ -1,4 +1,5 @@
 """Unit tests for joebot.reporting.narrative against fixture signal data."""
+from joebot.data import health
 from joebot.reporting.narrative import BULLET_SCORE_THRESHOLD, build_narrative
 from joebot.screener.composite import RankedCandidate
 from joebot.signals.base import SignalResult
@@ -118,3 +119,66 @@ def test_risk_bullets_flag_low_confidence_contributing_signals():
 
 def test_bullet_score_threshold_is_positive():
     assert BULLET_SCORE_THRESHOLD > 0
+
+
+def test_bear_case_always_discloses_unchecked_factors():
+    card = build_narrative(_candidate(0.5, {}))
+    assert any("Not checked at all" in b and "short interest" in b for b in card.risk_bullets)
+
+
+def test_data_gap_bullet_fires_when_source_unavailable():
+    candidate = _candidate(0.3, {
+        "clinical_trial": SignalResult(
+            score=0.0, confidence=0.0,
+            metadata={"data_source_status": {health.CLINICALTRIALS: health.UNAVAILABLE}},
+        ),
+    })
+    card = build_narrative(candidate)
+    assert any("ClinicalTrials.gov was unreachable" in b for b in card.data_gap_bullets)
+
+
+def test_data_gap_bullet_fires_for_not_configured_zero_score_signal():
+    candidate = _candidate(0.3, {
+        "sentiment_reddit": SignalResult(
+            score=0.0, confidence=0.3,
+            metadata={"mention_count": 0, "data_source_status": {health.REDDIT: health.NOT_CONFIGURED}},
+        ),
+    })
+    card = build_narrative(candidate)
+    assert any("isn't configured" in b for b in card.data_gap_bullets)
+
+
+def test_no_data_gap_bullets_when_all_sources_ok():
+    candidate = _candidate(0.3, {
+        "technical_breakout": SignalResult(score=0.3, confidence=1.0, metadata={"data_source_status": {health.MARKET_DATA: health.OK}}),
+    })
+    card = build_narrative(candidate)
+    assert card.data_gap_bullets == []
+
+
+def test_event_timeline_is_sorted_chronologically_across_signals():
+    candidate = _candidate(0.7, {
+        "activist_stake": SignalResult(
+            score=0.9, confidence=0.8,
+            metadata={"filings": [{"form": "SC 13D", "filer_name": "Ryan Cohen", "filing_date": "2026-04-02"}]},
+        ),
+        "leadership_change": SignalResult(
+            score=0.5, confidence=0.8,
+            metadata={"filings": [{"filing_date": "2026-01-12"}]},
+        ),
+        "gov_contract": SignalResult(
+            score=0.6, confidence=0.6,
+            metadata={"awards": [{"amount": 5_000_000, "agency": "DoD", "date": "2026-04-15"}]},
+        ),
+    })
+    card = build_narrative(candidate)
+    dates_in_order = [t.split(" -- ")[0] for t in card.timeline]
+    assert dates_in_order == sorted(dates_in_order)
+    assert any("Ryan Cohen" in t for t in card.timeline)
+    assert any("officer/director change" in t for t in card.timeline)
+    assert any("DoD" in t for t in card.timeline)
+
+
+def test_event_timeline_empty_when_no_dated_events():
+    card = build_narrative(_candidate(0.2, {"technical_breakout": SignalResult(score=0.2, confidence=1.0, metadata={})}))
+    assert card.timeline == []

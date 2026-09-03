@@ -12,8 +12,8 @@ import numpy as np
 import pandas as pd
 
 from config import settings
-from joebot.data import market_data
-from joebot.signals.base import SignalResult
+from joebot.data import health, market_data
+from joebot.signals.base import SignalResult, with_source_status
 
 
 def pct_below_52wk_high(prices: pd.Series) -> float:
@@ -77,6 +77,7 @@ def ma_crossover_bullish(
 class TechnicalBreakoutSignal:
     name = "technical_breakout"
 
+    @with_source_status(health.MARKET_DATA)
     def score(self, ticker: str, as_of_date: dt.date) -> SignalResult:
         try:
             df = market_data.fetch_price_history_covering(ticker, as_of_date)

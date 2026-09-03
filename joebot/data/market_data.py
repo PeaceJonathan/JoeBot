@@ -16,6 +16,7 @@ import requests
 import yfinance as yf
 
 from config import settings
+from joebot.data import health
 from joebot.data.cache import DiskCache, market_data_rate_limiter
 
 log = logging.getLogger(__name__)
@@ -82,17 +83,25 @@ def _fetch_from_yfinance(ticker: str, lookback_days: int) -> pd.DataFrame | None
         market_data_rate_limiter.wait()
         hist = yf.Ticker(ticker).history(period=f"{lookback_days}d", auto_adjust=True)
         if hist is None or hist.empty:
+            # A clean empty response (not an exception) is a real "no data
+            # for this ticker" -- e.g. a bad symbol -- not a source outage.
+            health.record_success(health.MARKET_DATA, detail="empty response")
             return None
         hist = hist.rename(columns=str.lower)[["open", "high", "low", "close", "volume"]]
         hist.index.name = "date"
+        health.record_success(health.MARKET_DATA)
         return hist
     except Exception as exc:  # yfinance can raise a variety of network/parse errors
         log.warning("yfinance failed for %s: %s", ticker, exc)
+        health.record_failure(health.MARKET_DATA, detail=str(exc))
         return None
 
 
 def _fetch_from_finnhub(ticker: str, lookback_days: int) -> pd.DataFrame | None:
     if not settings.FINNHUB_API_KEY:
+        # Only a fallback for yfinance, and yfinance already recorded its
+        # own failure -- don't overwrite that with "not configured", which
+        # would hide a real yfinance outage behind an unrelated message.
         return None
     try:
         import time
@@ -126,9 +135,13 @@ def _fetch_from_finnhub(ticker: str, lookback_days: int) -> pd.DataFrame | None:
             index=pd.to_datetime(payload["t"], unit="s"),
         )
         df.index.name = "date"
+        # Recovered via the fallback -- overall market-data availability is
+        # OK even though yfinance itself just failed for this ticker.
+        health.record_success(health.MARKET_DATA, detail="finnhub fallback")
         return df
     except Exception as exc:
         log.warning("Finnhub fallback failed for %s: %s", ticker, exc)
+        health.record_failure(health.MARKET_DATA, detail=f"finnhub fallback: {exc}")
         return None
 
 
@@ -147,8 +160,10 @@ def _fetch_info(ticker: str) -> dict:
         info = yf.Ticker(ticker).get_info()
         market_cap = info.get("marketCap")
         company_name = info.get("longName") or info.get("shortName")
+        health.record_success(health.MARKET_DATA)
     except Exception as exc:
         log.warning("Failed to fetch info for %s: %s", ticker, exc)
+        health.record_failure(health.MARKET_DATA, detail=str(exc))
 
     result = {"market_cap": market_cap, "company_name": company_name}
     _info_cache.set(ticker, result)

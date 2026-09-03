@@ -60,6 +60,27 @@ class SignalHistory(Base):
     candidate: Mapped[Candidate] = relationship(back_populates="signal_results")
 
 
+class DataHealthRecord(Base):
+    """One external source's connectivity status as of one scan run --
+    a persisted snapshot of joebot/data/health.py's in-process registry, so
+    the dashboard's Data Health panel (section 16) reflects the health of
+    whichever process actually ran the scan (a cron job, most often) rather
+    than only the Streamlit process's own, separate in-memory state.
+    """
+
+    __tablename__ = "data_health"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    scan_run_id: Mapped[int] = mapped_column(ForeignKey("scan_runs.id"))
+    source: Mapped[str] = mapped_column(String)
+    status: Mapped[str] = mapped_column(String)
+    detail: Mapped[str | None] = mapped_column(String, nullable=True)
+    call_count: Mapped[int] = mapped_column(Integer, default=0)
+    failure_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_success_at: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_attempt_at: Mapped[str | None] = mapped_column(String, nullable=True)
+
+
 class FilingEvent(Base):
     """One raw SEC filing hit (13D/13G/8-K) discovered by a catalyst signal.
 
