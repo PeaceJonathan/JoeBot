@@ -6,6 +6,8 @@ from __future__ import annotations
 import dataclasses
 import datetime as dt
 
+from joebot.screener.composite import RankedCandidate
+from joebot.signals.base import SignalResult
 from joebot.storage.db import get_session
 from joebot.storage.models import BacktestRun, Candidate, ScanRun, SignalAttributionRecord
 
@@ -17,6 +19,20 @@ class CandidateView:
     composite_score: float
     rank: int
     signals: dict[str, dict]  # signal_name -> {"score", "confidence", "metadata"}
+
+    def to_ranked_candidate(self) -> RankedCandidate:
+        """Reconstructs a RankedCandidate (SignalResult objects, not plain
+        dicts) so DB-backed views can reuse joebot/reporting/narrative.py --
+        the same narrative builder a fresh scan's report uses."""
+        return RankedCandidate(
+            ticker=self.ticker,
+            sector=self.sector,
+            composite_score=self.composite_score,
+            signal_results={
+                name: SignalResult(score=s["score"], confidence=s["confidence"], metadata=s["metadata"])
+                for name, s in self.signals.items()
+            },
+        )
 
 
 def latest_scan_run() -> ScanRun | None:

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import streamlit as st
 
+from joebot.reporting.narrative import build_narrative
 from joebot.risk.profile import get_risk_profile
 from joebot.screener.composite import passes_risk_filter
 from joebot.storage.queries import latest_candidates
@@ -51,10 +52,21 @@ def render(risk_slider_value: float) -> None:
         "`python scripts/run_backtest.py` before trusting these weights."
     )
 
-    with st.expander("Full signal detail for a ticker"):
-        ticker_options = [c.ticker for c in filtered]
-        selected = st.selectbox("Ticker", ticker_options)
-        selected_candidate = next(c for c in filtered if c.ticker == selected)
+    st.subheader("Why it appeared")
+    ticker_options = [c.ticker for c in filtered]
+    selected = st.selectbox("Ticker", ticker_options)
+    selected_candidate = next(c for c in filtered if c.ticker == selected)
+
+    card = build_narrative(selected_candidate.to_ranked_candidate())
+    st.markdown(f"**Verdict:** {card.verdict}")
+    st.markdown("**Why it appeared:**")
+    for b in card.why_bullets:
+        st.markdown(f"- {b}")
+    st.markdown("**What could go wrong:**")
+    for b in card.risk_bullets:
+        st.markdown(f"- {b}")
+
+    with st.expander("Raw signal data (for debugging)"):
         for name, sig in selected_candidate.signals.items():
             st.write(f"**{name}** -- score={sig['score']:.3f}, confidence={sig['confidence']:.2f}")
             st.json(sig["metadata"])

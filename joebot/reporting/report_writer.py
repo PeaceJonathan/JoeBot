@@ -10,6 +10,7 @@ from pathlib import Path
 
 from config import settings
 from config.settings import RiskProfile
+from joebot.reporting.narrative import build_narrative
 from joebot.risk.position_sizing import PositionSuggestion
 from joebot.screener.composite import RankedCandidate
 
@@ -26,6 +27,7 @@ def write_report(
     as_of_date: dt.date,
     candidates: list[RankedCandidate],
     top_n: int = 25,
+    narrative_top_n: int = 10,
     risk_profile: RiskProfile | None = None,
     budget: float | None = None,
     position_suggestions: list[PositionSuggestion] | None = None,
@@ -53,6 +55,22 @@ def write_report(
             f"| {rank} | {candidate.ticker} | {candidate.sector} | "
             f"{candidate.composite_score:.3f} | {details} |"
         )
+
+    if candidates:
+        lines += ["", f"## Top {min(narrative_top_n, len(candidates))} opportunities -- why they appeared", ""]
+        for candidate in candidates[:narrative_top_n]:
+            card = build_narrative(candidate)
+            lines += [
+                f"### {card.ticker} ({card.sector}) -- score {card.composite_score:.2f}",
+                "",
+                f"**Verdict:** {card.verdict}",
+                "",
+                "**Why it appeared:**",
+            ]
+            lines += [f"- {b}" for b in card.why_bullets]
+            lines += ["", "**What could go wrong:**"]
+            lines += [f"- {b}" for b in card.risk_bullets]
+            lines.append("")
 
     if risk_profile is not None and budget is not None:
         lines += [
