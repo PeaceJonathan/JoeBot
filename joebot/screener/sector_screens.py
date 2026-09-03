@@ -10,16 +10,21 @@ from joebot.signals.base import Signal
 from joebot.signals.catalyst_clinical import ClinicalTrialSignal
 from joebot.signals.catalyst_sec import ActivistStakeSignal, LeadershipChangeSignal
 from joebot.signals.fundamental import FundamentalSanitySignal
+from joebot.signals.gov_contract import GovContractSignal
+from joebot.signals.patent_activity import PatentActivitySignal
 from joebot.signals.sentiment_reddit import SentimentRedditSignal
 from joebot.signals.technical import TechnicalBreakoutSignal
 
 log = logging.getLogger(__name__)
 
-# Catalyst and sentiment signals apply across every sector -- a 13D/13G
-# activist stake, a leadership shakeup, or Reddit chatter isn't confined to
-# any one sector. ClinicalTrialSignal is a no-op (score 0, confidence 0)
-# for any ticker missing from config/pharma_crosswalk.yaml, so it's safe to
-# include in every sector's scoring rather than special-casing pharma.
+# Catalyst, sentiment, gov-contract, and patent signals apply across every
+# sector -- a 13D/13G activist stake, a leadership shakeup, Reddit chatter,
+# a contract award, or a patent-filing burst isn't confined to any one
+# sector. ClinicalTrialSignal, GovContractSignal, and PatentActivitySignal
+# all no-op (score 0, low/zero confidence) when their prerequisite data is
+# missing (no crosswalk entry, no company name, no API key), so it's safe
+# to include them everywhere rather than special-casing which sectors get
+# which signals.
 DEFAULT_SIGNALS: list[Signal] = [
     TechnicalBreakoutSignal(),
     FundamentalSanitySignal(),
@@ -27,6 +32,8 @@ DEFAULT_SIGNALS: list[Signal] = [
     LeadershipChangeSignal(),
     SentimentRedditSignal(),
     ClinicalTrialSignal(),
+    GovContractSignal(),
+    PatentActivitySignal(),
 ]
 
 

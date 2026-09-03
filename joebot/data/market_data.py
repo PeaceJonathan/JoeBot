@@ -132,19 +132,37 @@ def _fetch_from_finnhub(ticker: str, lookback_days: int) -> pd.DataFrame | None:
         return None
 
 
-def fetch_market_cap(ticker: str) -> float | None:
-    """Best-effort current market cap; returns None if unavailable."""
+def _fetch_info(ticker: str) -> dict:
+    """Cached yfinance `.get_info()` payload -- market cap and company name
+    both come from this one call, so both accessors below share the cache
+    entry instead of double-fetching."""
     cached = _info_cache.get(ticker)
     if cached is not None:
-        return cached.get("market_cap")
+        return cached
 
     market_cap = None
+    company_name = None
     try:
         market_data_rate_limiter.wait()
         info = yf.Ticker(ticker).get_info()
         market_cap = info.get("marketCap")
+        company_name = info.get("longName") or info.get("shortName")
     except Exception as exc:
-        log.warning("Failed to fetch market cap for %s: %s", ticker, exc)
+        log.warning("Failed to fetch info for %s: %s", ticker, exc)
 
-    _info_cache.set(ticker, {"market_cap": market_cap})
-    return market_cap
+    result = {"market_cap": market_cap, "company_name": company_name}
+    _info_cache.set(ticker, result)
+    return result
+
+
+def fetch_market_cap(ticker: str) -> float | None:
+    """Best-effort current market cap; returns None if unavailable."""
+    return _fetch_info(ticker).get("market_cap")
+
+
+def fetch_company_name(ticker: str) -> str | None:
+    """Best-effort company legal/display name (e.g. for matching against
+    SEC filer names, USAspending.gov recipient names, or patent assignee
+    names) -- returns None if unavailable rather than guessing from the
+    ticker symbol."""
+    return _fetch_info(ticker).get("company_name")
